@@ -1,11 +1,5 @@
 """
-Solana CA Telegram Bot - Full Version
-Features:
-- Detects Solana CAs posted in group
-- Fetches token data from DexScreener instantly
-- Monitors price every 15 mins, posts milestone alerts (2x/5x/10x etc)
-- Stops monitoring dead coins (no volume for 2 hours)
-- Posts daily Top 10 best calls at 12PM Sydney (only CAs from last 24hrs, ignores dead coins)
+Solana CA Telegram Bot - v3 Final
 """
 
 import os
@@ -24,8 +18,8 @@ from telegram.ext import (
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 SYDNEY_TZ = ZoneInfo("Australia/Sydney")
-CHECK_INTERVAL = 15 * 60          # 15 minutes
-DEAD_THRESHOLD = 2 * 60 * 60      # 2 hours no volume = dead
+CHECK_INTERVAL = 15 * 60
+DEAD_THRESHOLD = 2 * 60 * 60
 MILESTONE_MULTIPLIERS = [2, 5, 10, 25, 50, 100]
 DATA_FILE = "calls.json"
 # ─────────────────────────────────────────────────────────────────────────────
@@ -64,11 +58,41 @@ def get_price(pair: dict) -> float | None:
     except Exception:
         return None
 
+def get_mc(pair: dict) -> float | None:
+    try:
+        return float(pair.get("marketCap") or pair.get("fdv") or 0) or None
+    except Exception:
+        return None
+
 def get_volume(pair: dict) -> float:
     try:
         return float(pair.get("volume", {}).get("h24", 0))
     except Exception:
         return 0
+
+def get_liquidity(pair: dict) -> float | None:
+    try:
+        return float(pair.get("liquidity", {}).get("usd", 0)) or None
+    except Exception:
+        return None
+
+def get_age(pair: dict) -> str:
+    try:
+        created = pair.get("pairCreatedAt")
+        if not created:
+            return "N/A"
+        created_dt = datetime.fromtimestamp(created / 1000, tz=SYDNEY_TZ)
+        diff = datetime.now(SYDNEY_TZ) - created_dt
+        hours = int(diff.total_seconds() // 3600)
+        if hours < 1:
+            mins = int(diff.total_seconds() // 60)
+            return f"{mins}m"
+        if hours < 24:
+            return f"{hours}h"
+        days = hours // 24
+        return f"{days}d"
+    except Exception:
+        return "N/A"
 
 def fmt_usd(val) -> str:
     if val is None:
@@ -83,29 +107,41 @@ def fmt_usd(val) -> str:
 def fmt_x(x: float) -> str:
     return f"{x:.1f}x" if x < 10 else f"{int(x)}x"
 
-# ── CALL MESSAGE ──────────────────────────────────────────────────────────────
+def get_caller_name(user) -> str:
+    if user.username:
+        return f"@{user.username}"
+    return user.first_name or "Someone"
 
-def build_call_message(ca: str, pair: dict) -> tuple[str, str | None]:
+# ── MESSAGE BUILDER ───────────────────────────────────────────────────────────
+
+def build_call_message(ca: str, pair: dict, caller: str, entry_mc: float | None) -> tuple[str, str | None]:
     base = pair.get("baseToken", {})
     name = base.get("name", "Unknown")
     symbol = base.get("symbol", "?")
-    mc = pair.get("marketCap") or pair.get("fdv")
     info = pair.get("info", {})
     image_url = info.get("imageUrl") if isinstance(info.get("imageUrl"), str) else None
     holders = pair.get("holders", None)
     dex_paid = bool(pair.get("boosts", {}).get("active", 0))
     cto = "cto" in [l.lower() for l in pair.get("labels", [])]
+    liquidity = get_liquidity(pair)
+    volume24h = get_volume(pair)
+    age = get_age(pair)
 
     lines = [
         f"🪙 <b>{name} (${symbol})</b>",
         "",
         f"📋 <b>CA:</b> <code>{ca}</code>",
         "",
-        f"💰 <b>Market Cap:</b> {fmt_usd(mc)}",
+        f"💰 <b>Market Cap:</b> {fmt_usd(entry_mc)}",
+        f"💧 <b>Liquidity:</b> {fmt_usd(liquidity)}",
+        f"📊 <b>Volume 24h:</b> {fmt_usd(volume24h)}",
+        f"🕐 <b>Age:</b> {age}",
         f"👥 <b>Total Holders:</b> {int(holders):,}" if holders else "👥 <b>Total Holders:</b> N/A",
         "",
         f"Dexscreener Paid: {'✅' if dex_paid else '❌'}",
         f"CTO: {'✅' if cto else '❌'}",
+        "",
+        f"🏅 First call by {caller} @ <b>{fmt_usd(entry_mc)}</b> MC",
     ]
     return "\n".join(lines), image_url
 
@@ -121,6 +157,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     ca = matches[0]
+
+    # Already tracked
+    data = load_data()
+    if ca in data["calls"]:
+        existing = data["calls"][ca]
+        caller = existing["caller"]
+        entry_mc = existing.get("entry_mc")
+        current = existing.get("current_price", existing["entry_price"])
+        entry = existing["entry_price"]
+        mult = current / entry if entry > 0 else 1
+        await msg.reply_text(
+            f"⚠️ Already called by {caller} @ <b>{fmt_usd(entry_mc)}</b> MC\n"
+            f"📈 Currently at <b>{fmt_x(mult)}</b> from entry",
+            parse_mode="HTML"
+        )
+        return
+
     thinking = await msg.reply_text("🔍 Fetching token data...")
     pair = fetch_token_data(ca)
 
@@ -128,7 +181,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await thinking.edit_text("❌ Could not find token data for that CA.")
         return
 
-    text, image_url = build_call_message(ca, pair)
+    caller = get_caller_name(msg.from_user)
+    entry_mc = get_mc(pair)
+    text, image_url = build_call_message(ca, pair, caller, entry_mc)
+
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Copy CA", callback_data=f"copy:{ca}")]
     ])
@@ -144,14 +200,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     price = get_price(pair)
     if price:
-        data = load_data()
         base = pair.get("baseToken", {})
         data["calls"][ca] = {
             "chat_id": msg.chat_id,
             "name": base.get("name", "Unknown"),
             "symbol": base.get("symbol", "?"),
+            "caller": caller,
             "entry_price": price,
+            "entry_mc": entry_mc,
             "current_price": price,
+            "current_mc": entry_mc,
             "entry_time": datetime.now(SYDNEY_TZ).isoformat(),
             "milestones_hit": [],
             "last_volume_time": datetime.now(SYDNEY_TZ).isoformat(),
@@ -183,12 +241,12 @@ async def monitor_prices(bot: Bot):
                 continue
 
             current_price = get_price(pair)
+            current_mc = get_mc(pair)
             volume = get_volume(pair)
 
             if not current_price:
                 continue
 
-            # Mark dead if no volume for 2 hours
             if volume > 0:
                 info["last_volume_time"] = now.isoformat()
             else:
@@ -199,19 +257,20 @@ async def monitor_prices(bot: Bot):
                     continue
 
             entry_price = info["entry_price"]
+            entry_mc = info.get("entry_mc")
             multiplier = current_price / entry_price
             info["current_price"] = current_price
+            info["current_mc"] = current_mc
             changed = True
 
-            # Milestone alerts
             for m in MILESTONE_MULTIPLIERS:
                 if multiplier >= m and m not in info["milestones_hit"]:
                     info["milestones_hit"].append(m)
                     alert = (
                         f"🚀 <b>{info['name']} (${info['symbol']}) hit {m}x!</b>\n\n"
                         f"📋 <code>{ca}</code>\n"
-                        f"💰 Entry → Now: {fmt_usd(entry_price)} → {fmt_usd(current_price)}\n"
-                        f"📈 Current gain: <b>{fmt_x(multiplier)}</b>"
+                        f"🏅 First called by {info['caller']} @ <b>{fmt_usd(entry_mc)}</b> MC\n"
+                        f"📈 Now: <b>{fmt_usd(current_mc)}</b> MC — <b>{fmt_x(multiplier)}</b> from entry"
                     )
                     try:
                         await bot.send_message(chat_id=info["chat_id"], text=alert, parse_mode="HTML")
@@ -236,23 +295,17 @@ async def daily_top10(bot: Bot):
         now = datetime.now(SYDNEY_TZ)
         cutoff = now - timedelta(hours=24)
 
-        # Only include CAs posted in last 24hrs and still active (not dead)
         calls = []
         for ca, info in data["calls"].items():
             entry_time = datetime.fromisoformat(info["entry_time"])
-            is_recent = entry_time >= cutoff
-            is_active = info.get("active", True)
-
-            if not is_recent or not is_active:
+            if entry_time < cutoff or not info.get("active", True):
                 continue
-
             entry = info["entry_price"]
             current = info.get("current_price", entry)
-            if entry > 0 and current > entry:  # Only coins that grew
+            if entry > 0 and current > entry:
                 calls.append((ca, info, current / entry))
 
         if not calls:
-            # No qualifying calls, skip posting
             continue
 
         calls.sort(key=lambda x: x[2], reverse=True)
@@ -265,8 +318,11 @@ async def daily_top10(bot: Bot):
             f"📅 {now.strftime('%d %b %Y, %I:%M %p')} AEST\n"
         ]
         for i, (ca, info, mult) in enumerate(top10):
+            entry_mc = info.get("entry_mc")
+            current_mc = info.get("current_mc")
             lines.append(
-                f"{medals[i]} <b>${info['symbol']}</b> +<b>{fmt_x(mult)}</b>\n"
+                f"{medals[i]} <b>${info['symbol']}</b> — <b>{fmt_x(mult)}</b>\n"
+                f"   👤 {info['caller']} @ {fmt_usd(entry_mc)} → {fmt_usd(current_mc)}\n"
                 f"   <code>{ca[:20]}...</code>"
             )
 
