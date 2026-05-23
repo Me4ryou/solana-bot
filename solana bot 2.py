@@ -1,7 +1,8 @@
 """
 Solana CA Telegram Bot - v3 Final
-- Tries pump.fun first, then DexScreener
-- Combines data from both sources
+- Pump.fun + DexScreener combo
+- Axiom, Terminal, GMGN links
+- All previous features intact
 """
 
 import os
@@ -76,6 +77,12 @@ def calc_age(created_ts_ms: int | None) -> str:
     except Exception:
         return "N/A"
 
+def build_links(ca: str) -> str:
+    axiom = f"https://axiom.trade/t/{ca}"
+    terminal = f"https://terminal.padre.trade/terminal/{ca}"
+    gmgn = f"https://gmgn.ai/sol/token/{ca}"
+    return f'🔗 <a href="{axiom}">Axiom</a> | <a href="{terminal}">Terminal</a> | <a href="{gmgn}">GMGN</a>'
+
 # ── PUMP.FUN API ──────────────────────────────────────────────────────────────
 
 def fetch_pumpfun_data(ca: str) -> dict | None:
@@ -108,27 +115,23 @@ def fetch_dex_data(ca: str) -> dict | None:
 # ── COMBINED FETCH ────────────────────────────────────────────────────────────
 
 def fetch_token(ca: str) -> dict | None:
-    """Fetch from both sources and combine."""
     pf = fetch_pumpfun_data(ca)
     dex = fetch_dex_data(ca)
 
     if not pf and not dex:
         return None
 
-    result = {"source": "dex"}
+    result = {}
 
-    # Name & symbol — prefer pump.fun for accuracy on new coins
     if pf:
         result["name"] = pf.get("name", "Unknown")
         result["symbol"] = pf.get("symbol", "?")
         result["image_url"] = pf.get("image_uri") or pf.get("uri")
-        result["description"] = pf.get("description", "")
-        # pump.fun MC = market_cap field or calculate from price
         mc = pf.get("market_cap") or pf.get("usd_market_cap")
         result["mc"] = float(mc) if mc else None
         result["created_timestamp"] = pf.get("created_timestamp")
-        result["pre_dex"] = not pf.get("raydium_pool")  # no raydium pool = pre-DEX
-        result["source"] = "pumpfun"
+        result["pre_dex"] = not pf.get("raydium_pool")
+        result["price"] = pf.get("price") or pf.get("sol_price")
 
     if dex:
         base = dex.get("baseToken", {})
@@ -137,7 +140,6 @@ def fetch_token(ca: str) -> dict | None:
             result["symbol"] = base.get("symbol", "?")
             info = dex.get("info", {})
             result["image_url"] = info.get("imageUrl") if isinstance(info.get("imageUrl"), str) else None
-        # DEX-specific fields
         result["liquidity"] = float(dex.get("liquidity", {}).get("usd", 0)) or None
         result["volume24h"] = float(dex.get("volume", {}).get("h24", 0)) or None
         result["holders"] = dex.get("holders")
@@ -148,14 +150,8 @@ def fetch_token(ca: str) -> dict | None:
             result["mc"] = float(dex_mc)
         if not pf:
             result["created_timestamp"] = dex.get("pairCreatedAt")
-        result["price"] = float(dex.get("priceUsd", 0)) or None
+        result["price"] = float(dex.get("priceUsd", 0)) or result.get("price")
         result["pre_dex"] = False
-        result["source"] = "both" if pf else "dex"
-
-    # Price from pump.fun if no DEX price
-    if not result.get("price") and pf:
-        price = pf.get("price") or pf.get("sol_price")
-        result["price"] = float(price) if price else None
 
     return result
 
@@ -179,12 +175,7 @@ def build_message(ca: str, token: dict, caller: str) -> tuple[str, str | None]:
     if pre_dex:
         lines.append("⚡ <b>Pre-DEX — Pump.fun</b>")
 
-    lines += [
-        "",
-        f"📋 <b>CA:</b> <code>{ca}</code>",
-        "",
-        f"💰 <b>Market Cap:</b> {fmt_usd(mc)}",
-    ]
+    lines += ["", f"📋 <b>CA:</b> <code>{ca}</code>", "", f"💰 <b>Market Cap:</b> {fmt_usd(mc)}"]
 
     if liquidity:
         lines.append(f"💧 <b>Liquidity:</b> {fmt_usd(liquidity)}")
@@ -192,22 +183,16 @@ def build_message(ca: str, token: dict, caller: str) -> tuple[str, str | None]:
         lines.append(f"📊 <b>Volume 24h:</b> {fmt_usd(volume24h)}")
 
     lines.append(f"🕐 <b>Age:</b> {age}")
-
-    if holders:
-        lines.append(f"👥 <b>Total Holders:</b> {int(holders):,}")
-    else:
-        lines.append("👥 <b>Total Holders:</b> N/A")
+    lines.append(f"👥 <b>Total Holders:</b> {int(holders):,}" if holders else "👥 <b>Total Holders:</b> N/A")
 
     if not pre_dex:
-        lines += [
-            "",
-            f"Dexscreener Paid: {'✅' if dex_paid else '❌'}",
-            f"CTO: {'✅' if cto else '❌'}",
-        ]
+        lines += ["", f"Dexscreener Paid: {'✅' if dex_paid else '❌'}", f"CTO: {'✅' if cto else '❌'}"]
 
     lines += [
         "",
         f"🏅 First call by {caller} @ <b>{fmt_usd(mc)}</b> MC",
+        "",
+        build_links(ca),
     ]
 
     return "\n".join(lines), image_url
@@ -226,7 +211,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ca = matches[0]
     data = load_data()
 
-    # Already tracked
     if ca in data["calls"]:
         existing = data["calls"][ca]
         caller = existing["caller"]
@@ -272,9 +256,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "name": token.get("name", "Unknown"),
             "symbol": token.get("symbol", "?"),
             "caller": caller,
-            "entry_price": price,
+            "entry_price": float(price),
             "entry_mc": mc,
-            "current_price": price,
+            "current_price": float(price),
             "current_mc": mc,
             "entry_time": datetime.now(SYDNEY_TZ).isoformat(),
             "milestones_hit": [],
@@ -313,6 +297,8 @@ async def monitor_prices(bot: Bot):
             if not current_price:
                 continue
 
+            current_price = float(current_price)
+
             if volume > 0:
                 info["last_volume_time"] = now.isoformat()
             else:
@@ -336,7 +322,8 @@ async def monitor_prices(bot: Bot):
                         f"🚀 <b>{info['name']} (${info['symbol']}) hit {m}x!</b>\n\n"
                         f"📋 <code>{ca}</code>\n"
                         f"🏅 First called by {info['caller']} @ <b>{fmt_usd(entry_mc)}</b> MC\n"
-                        f"📈 Now: <b>{fmt_usd(current_mc)}</b> MC — <b>{fmt_x(multiplier)}</b> from entry"
+                        f"📈 Now: <b>{fmt_usd(current_mc)}</b> MC — <b>{fmt_x(multiplier)}</b> from entry\n\n"
+                        f"{build_links(ca)}"
                     )
                     try:
                         await bot.send_message(chat_id=info["chat_id"], text=alert, parse_mode="HTML")
