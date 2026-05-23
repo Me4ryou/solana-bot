@@ -1,5 +1,7 @@
 """
 Solana CA Telegram Bot - v3 Final
+- Tries pump.fun first, then DexScreener
+- Combines data from both sources
 """
 
 import os
@@ -38,61 +40,7 @@ def save_data(data: dict):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
-# ── DEXSCREENER ───────────────────────────────────────────────────────────────
-
-def fetch_token_data(ca: str) -> dict | None:
-    try:
-        url = f"https://api.dexscreener.com/latest/dex/tokens/{ca}"
-        res = requests.get(url, timeout=10)
-        res.raise_for_status()
-        pairs = res.json().get("pairs")
-        if not pairs:
-            return None
-        return sorted(pairs, key=lambda p: p.get("liquidity", {}).get("usd", 0), reverse=True)[0]
-    except Exception:
-        return None
-
-def get_price(pair: dict) -> float | None:
-    try:
-        return float(pair.get("priceUsd", 0)) or None
-    except Exception:
-        return None
-
-def get_mc(pair: dict) -> float | None:
-    try:
-        return float(pair.get("marketCap") or pair.get("fdv") or 0) or None
-    except Exception:
-        return None
-
-def get_volume(pair: dict) -> float:
-    try:
-        return float(pair.get("volume", {}).get("h24", 0))
-    except Exception:
-        return 0
-
-def get_liquidity(pair: dict) -> float | None:
-    try:
-        return float(pair.get("liquidity", {}).get("usd", 0)) or None
-    except Exception:
-        return None
-
-def get_age(pair: dict) -> str:
-    try:
-        created = pair.get("pairCreatedAt")
-        if not created:
-            return "N/A"
-        created_dt = datetime.fromtimestamp(created / 1000, tz=SYDNEY_TZ)
-        diff = datetime.now(SYDNEY_TZ) - created_dt
-        hours = int(diff.total_seconds() // 3600)
-        if hours < 1:
-            mins = int(diff.total_seconds() // 60)
-            return f"{mins}m"
-        if hours < 24:
-            return f"{hours}h"
-        days = hours // 24
-        return f"{days}d"
-    except Exception:
-        return "N/A"
+# ── FORMATTERS ────────────────────────────────────────────────────────────────
 
 def fmt_usd(val) -> str:
     if val is None:
@@ -112,37 +60,156 @@ def get_caller_name(user) -> str:
         return f"@{user.username}"
     return user.first_name or "Someone"
 
+def calc_age(created_ts_ms: int | None) -> str:
+    if not created_ts_ms:
+        return "N/A"
+    try:
+        created_dt = datetime.fromtimestamp(created_ts_ms / 1000, tz=SYDNEY_TZ)
+        diff = datetime.now(SYDNEY_TZ) - created_dt
+        hours = int(diff.total_seconds() // 3600)
+        if hours < 1:
+            mins = int(diff.total_seconds() // 60)
+            return f"{mins}m"
+        if hours < 24:
+            return f"{hours}h"
+        return f"{hours // 24}d"
+    except Exception:
+        return "N/A"
+
+# ── PUMP.FUN API ──────────────────────────────────────────────────────────────
+
+def fetch_pumpfun_data(ca: str) -> dict | None:
+    try:
+        url = f"https://frontend-api.pump.fun/coins/{ca}"
+        res = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        if res.status_code != 200:
+            return None
+        data = res.json()
+        if not data or "mint" not in data:
+            return None
+        return data
+    except Exception:
+        return None
+
+# ── DEXSCREENER API ───────────────────────────────────────────────────────────
+
+def fetch_dex_data(ca: str) -> dict | None:
+    try:
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{ca}"
+        res = requests.get(url, timeout=10)
+        res.raise_for_status()
+        pairs = res.json().get("pairs")
+        if not pairs:
+            return None
+        return sorted(pairs, key=lambda p: p.get("liquidity", {}).get("usd", 0), reverse=True)[0]
+    except Exception:
+        return None
+
+# ── COMBINED FETCH ────────────────────────────────────────────────────────────
+
+def fetch_token(ca: str) -> dict | None:
+    """Fetch from both sources and combine."""
+    pf = fetch_pumpfun_data(ca)
+    dex = fetch_dex_data(ca)
+
+    if not pf and not dex:
+        return None
+
+    result = {"source": "dex"}
+
+    # Name & symbol — prefer pump.fun for accuracy on new coins
+    if pf:
+        result["name"] = pf.get("name", "Unknown")
+        result["symbol"] = pf.get("symbol", "?")
+        result["image_url"] = pf.get("image_uri") or pf.get("uri")
+        result["description"] = pf.get("description", "")
+        # pump.fun MC = market_cap field or calculate from price
+        mc = pf.get("market_cap") or pf.get("usd_market_cap")
+        result["mc"] = float(mc) if mc else None
+        result["created_timestamp"] = pf.get("created_timestamp")
+        result["pre_dex"] = not pf.get("raydium_pool")  # no raydium pool = pre-DEX
+        result["source"] = "pumpfun"
+
+    if dex:
+        base = dex.get("baseToken", {})
+        if not pf:
+            result["name"] = base.get("name", "Unknown")
+            result["symbol"] = base.get("symbol", "?")
+            info = dex.get("info", {})
+            result["image_url"] = info.get("imageUrl") if isinstance(info.get("imageUrl"), str) else None
+        # DEX-specific fields
+        result["liquidity"] = float(dex.get("liquidity", {}).get("usd", 0)) or None
+        result["volume24h"] = float(dex.get("volume", {}).get("h24", 0)) or None
+        result["holders"] = dex.get("holders")
+        result["dex_paid"] = bool(dex.get("boosts", {}).get("active", 0))
+        result["cto"] = "cto" in [l.lower() for l in dex.get("labels", [])]
+        dex_mc = dex.get("marketCap") or dex.get("fdv")
+        if dex_mc:
+            result["mc"] = float(dex_mc)
+        if not pf:
+            result["created_timestamp"] = dex.get("pairCreatedAt")
+        result["price"] = float(dex.get("priceUsd", 0)) or None
+        result["pre_dex"] = False
+        result["source"] = "both" if pf else "dex"
+
+    # Price from pump.fun if no DEX price
+    if not result.get("price") and pf:
+        price = pf.get("price") or pf.get("sol_price")
+        result["price"] = float(price) if price else None
+
+    return result
+
 # ── MESSAGE BUILDER ───────────────────────────────────────────────────────────
 
-def build_call_message(ca: str, pair: dict, caller: str, entry_mc: float | None) -> tuple[str, str | None]:
-    base = pair.get("baseToken", {})
-    name = base.get("name", "Unknown")
-    symbol = base.get("symbol", "?")
-    info = pair.get("info", {})
-    image_url = info.get("imageUrl") if isinstance(info.get("imageUrl"), str) else None
-    holders = pair.get("holders", None)
-    dex_paid = bool(pair.get("boosts", {}).get("active", 0))
-    cto = "cto" in [l.lower() for l in pair.get("labels", [])]
-    liquidity = get_liquidity(pair)
-    volume24h = get_volume(pair)
-    age = get_age(pair)
+def build_message(ca: str, token: dict, caller: str) -> tuple[str, str | None]:
+    name = token.get("name", "Unknown")
+    symbol = token.get("symbol", "?")
+    mc = token.get("mc")
+    liquidity = token.get("liquidity")
+    volume24h = token.get("volume24h")
+    holders = token.get("holders")
+    dex_paid = token.get("dex_paid", False)
+    cto = token.get("cto", False)
+    age = calc_age(token.get("created_timestamp"))
+    image_url = token.get("image_url")
+    pre_dex = token.get("pre_dex", False)
 
-    lines = [
-        f"🪙 <b>{name} (${symbol})</b>",
+    lines = [f"🪙 <b>{name} (${symbol})</b>"]
+
+    if pre_dex:
+        lines.append("⚡ <b>Pre-DEX — Pump.fun</b>")
+
+    lines += [
         "",
         f"📋 <b>CA:</b> <code>{ca}</code>",
         "",
-        f"💰 <b>Market Cap:</b> {fmt_usd(entry_mc)}",
-        f"💧 <b>Liquidity:</b> {fmt_usd(liquidity)}",
-        f"📊 <b>Volume 24h:</b> {fmt_usd(volume24h)}",
-        f"🕐 <b>Age:</b> {age}",
-        f"👥 <b>Total Holders:</b> {int(holders):,}" if holders else "👥 <b>Total Holders:</b> N/A",
-        "",
-        f"Dexscreener Paid: {'✅' if dex_paid else '❌'}",
-        f"CTO: {'✅' if cto else '❌'}",
-        "",
-        f"🏅 First call by {caller} @ <b>{fmt_usd(entry_mc)}</b> MC",
+        f"💰 <b>Market Cap:</b> {fmt_usd(mc)}",
     ]
+
+    if liquidity:
+        lines.append(f"💧 <b>Liquidity:</b> {fmt_usd(liquidity)}")
+    if volume24h:
+        lines.append(f"📊 <b>Volume 24h:</b> {fmt_usd(volume24h)}")
+
+    lines.append(f"🕐 <b>Age:</b> {age}")
+
+    if holders:
+        lines.append(f"👥 <b>Total Holders:</b> {int(holders):,}")
+    else:
+        lines.append("👥 <b>Total Holders:</b> N/A")
+
+    if not pre_dex:
+        lines += [
+            "",
+            f"Dexscreener Paid: {'✅' if dex_paid else '❌'}",
+            f"CTO: {'✅' if cto else '❌'}",
+        ]
+
+    lines += [
+        "",
+        f"🏅 First call by {caller} @ <b>{fmt_usd(mc)}</b> MC",
+    ]
+
     return "\n".join(lines), image_url
 
 # ── HANDLERS ──────────────────────────────────────────────────────────────────
@@ -157,9 +224,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     ca = matches[0]
+    data = load_data()
 
     # Already tracked
-    data = load_data()
     if ca in data["calls"]:
         existing = data["calls"][ca]
         caller = existing["caller"]
@@ -175,15 +242,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     thinking = await msg.reply_text("🔍 Fetching token data...")
-    pair = fetch_token_data(ca)
+    token = fetch_token(ca)
 
-    if not pair:
-        await thinking.edit_text("❌ Could not find token data for that CA.")
+    if not token:
+        await thinking.edit_text("❌ Could not find token data. May not be listed yet.")
         return
 
     caller = get_caller_name(msg.from_user)
-    entry_mc = get_mc(pair)
-    text, image_url = build_call_message(ca, pair, caller, entry_mc)
+    text, image_url = build_message(ca, token, caller)
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Copy CA", callback_data=f"copy:{ca}")]
@@ -198,18 +264,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await msg.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
-    price = get_price(pair)
+    price = token.get("price")
+    mc = token.get("mc")
     if price:
-        base = pair.get("baseToken", {})
         data["calls"][ca] = {
             "chat_id": msg.chat_id,
-            "name": base.get("name", "Unknown"),
-            "symbol": base.get("symbol", "?"),
+            "name": token.get("name", "Unknown"),
+            "symbol": token.get("symbol", "?"),
             "caller": caller,
             "entry_price": price,
-            "entry_mc": entry_mc,
+            "entry_mc": mc,
             "current_price": price,
-            "current_mc": entry_mc,
+            "current_mc": mc,
             "entry_time": datetime.now(SYDNEY_TZ).isoformat(),
             "milestones_hit": [],
             "last_volume_time": datetime.now(SYDNEY_TZ).isoformat(),
@@ -236,13 +302,13 @@ async def monitor_prices(bot: Bot):
             if not info.get("active", True):
                 continue
 
-            pair = fetch_token_data(ca)
-            if not pair:
+            token = fetch_token(ca)
+            if not token:
                 continue
 
-            current_price = get_price(pair)
-            current_mc = get_mc(pair)
-            volume = get_volume(pair)
+            current_price = token.get("price")
+            current_mc = token.get("mc")
+            volume = token.get("volume24h") or 0
 
             if not current_price:
                 continue
@@ -318,11 +384,9 @@ async def daily_top10(bot: Bot):
             f"📅 {now.strftime('%d %b %Y, %I:%M %p')} AEST\n"
         ]
         for i, (ca, info, mult) in enumerate(top10):
-            entry_mc = info.get("entry_mc")
-            current_mc = info.get("current_mc")
             lines.append(
                 f"{medals[i]} <b>${info['symbol']}</b> — <b>{fmt_x(mult)}</b>\n"
-                f"   👤 {info['caller']} @ {fmt_usd(entry_mc)} → {fmt_usd(current_mc)}\n"
+                f"   👤 {info['caller']} @ {fmt_usd(info.get('entry_mc'))} → {fmt_usd(info.get('current_mc'))}\n"
                 f"   <code>{ca[:20]}...</code>"
             )
 
