@@ -1,6 +1,6 @@
 """
 Solana Alpha Telegram Bot — Final Version
-Fixed: event loop conflict
+New: Auto delete CA, Pin Top 10, Weekly leaderboard, Streak tracker, /groupstats
 """
 
 import os
@@ -50,7 +50,8 @@ async def init_db():
             milestones TEXT,
             created_at TEXT,
             last_volume_at TEXT,
-            active INTEGER
+            active INTEGER,
+            win INTEGER DEFAULT 0
         )
         """)
         await db.commit()
@@ -188,16 +189,10 @@ def build_message(ca: str, token: dict, caller: str) -> tuple[str, str | None]:
     image = token.get("image")
 
     lines = [f"🪙 <b>{name} (${symbol})</b>"]
-
     if pre_dex:
         lines.append("⚡ <b>Pre-DEX — Pump.fun</b>")
 
-    lines += [
-        "",
-        f"📋 <b>CA:</b> <code>{ca}</code>",
-        "",
-        f"💰 <b>Market Cap:</b> {fmt_usd(mc)}",
-    ]
+    lines += ["", f"📋 <b>CA:</b> <code>{ca}</code>", "", f"💰 <b>Market Cap:</b> {fmt_usd(mc)}"]
 
     if liquidity:
         lines.append(f"💧 <b>Liquidity:</b> {fmt_usd(liquidity)}")
@@ -208,20 +203,28 @@ def build_message(ca: str, token: dict, caller: str) -> tuple[str, str | None]:
     lines.append(f"👥 <b>Holders:</b> {int(holders):,}" if holders else "👥 <b>Holders:</b> N/A")
 
     if not pre_dex:
-        lines += [
-            "",
-            f"Dexscreener Paid: {'✅' if dex_paid else '❌'}",
-            f"CTO: {'✅' if cto else '❌'}",
-        ]
+        lines += ["", f"Dexscreener Paid: {'✅' if dex_paid else '❌'}", f"CTO: {'✅' if cto else '❌'}"]
 
-    lines += [
-        "",
-        f"🏅 First call by {caller} @ <b>{fmt_usd(mc)}</b> MC",
-        "",
-        build_links(ca),
-    ]
+    lines += ["", f"🏅 First call by {caller} @ <b>{fmt_usd(mc)}</b> MC", "", build_links(ca)]
 
     return "\n".join(lines), image
+
+# ── STREAK HELPER ─────────────────────────────────────────────────────────────
+
+async def get_streak(caller: str) -> int:
+    async with aiosqlite.connect(DB_FILE) as db:
+        cursor = await db.execute("""
+        SELECT current_price, entry_price FROM calls
+        WHERE caller=? ORDER BY created_at DESC LIMIT 10
+        """, (caller,))
+        rows = await cursor.fetchall()
+    streak = 0
+    for row in rows:
+        if row[0] > row[1]:
+            streak += 1
+        else:
+            break
+    return streak
 
 # ── HANDLERS ──────────────────────────────────────────────────────────────────
 
@@ -236,6 +239,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     ca = matches[0]
 
+    # Auto delete original CA message
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
     async with aiosqlite.connect(DB_FILE) as db:
         cursor = await db.execute("SELECT * FROM calls WHERE ca=?", (ca,))
         existing = await cursor.fetchone()
@@ -244,14 +253,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         entry_price = existing[5]
         current_price = existing[6]
         mult = current_price / entry_price if entry_price else 1
-        await msg.reply_text(
-            f"⚠️ Already called by {existing[4]} @ <b>{fmt_usd(existing[8])}</b> MC\n"
-            f"📈 Currently at <b>{fmt_x(mult)}</b> from entry",
+        await context.bot.send_message(
+            chat_id=msg.chat_id,
+            text=f"⚠️ Already called by {existing[4]} @ <b>{fmt_usd(existing[8])}</b> MC\n"
+                 f"📈 Currently at <b>{fmt_x(mult)}</b> from entry",
             parse_mode="HTML"
         )
         return
 
-    thinking = await msg.reply_text("🔍 Fetching token data...")
+    thinking = await context.bot.send_message(chat_id=msg.chat_id, text="🔍 Fetching token data...")
     token = await fetch_token(ca)
 
     if not token:
@@ -267,21 +277,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await thinking.delete()
 
+    # Streak check
+    streak = await get_streak(caller)
+    streak_msg = ""
+    if streak >= 2:
+        streak_msg = f"\n🔥 <b>{caller} is on a {streak} win streak!</b>"
+
+    full_text = text + streak_msg
+
     try:
         if image:
-            await msg.reply_photo(photo=image, caption=text, parse_mode="HTML", reply_markup=keyboard)
+            await context.bot.send_photo(chat_id=msg.chat_id, photo=image,
+                                          caption=full_text, parse_mode="HTML", reply_markup=keyboard)
         else:
-            await msg.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+            await context.bot.send_message(chat_id=msg.chat_id, text=full_text,
+                                            parse_mode="HTML", reply_markup=keyboard)
     except Exception:
-        await msg.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+        await context.bot.send_message(chat_id=msg.chat_id, text=full_text,
+                                        parse_mode="HTML", reply_markup=keyboard)
 
     # Mirror to channel
     try:
         if image:
             await context.bot.send_photo(chat_id=CHANNEL_ID, photo=image,
-                                          caption=text, parse_mode="HTML", reply_markup=keyboard)
+                                          caption=full_text, parse_mode="HTML", reply_markup=keyboard)
         else:
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=text,
+            await context.bot.send_message(chat_id=CHANNEL_ID, text=full_text,
                                             parse_mode="HTML", reply_markup=keyboard)
     except Exception:
         pass
@@ -294,10 +315,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await db.execute("""
         INSERT OR IGNORE INTO calls
         (ca, chat_id, name, symbol, caller, entry_price, current_price, last_checked_price,
-         entry_mc, current_mc, milestones, created_at, last_volume_at, active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         entry_mc, current_mc, milestones, created_at, last_volume_at, active, win)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (ca, msg.chat_id, token.get("name"), token.get("symbol"),
-              caller, price, price, price, mc, mc, json.dumps([]), now, now, 1))
+              caller, price, price, price, mc, mc, json.dumps([]), now, now, 1, 0))
         await db.commit()
 
 
@@ -325,12 +346,14 @@ async def handle_mystats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     winning = sum(1 for r in rows if r[5] > r[4])
     best = max(rows, key=lambda r: r[5]/r[4] if r[4] else 1)
     best_mult = best[5] / best[4] if best[4] else 1
+    streak = await get_streak(caller)
 
     lines = [
         f"📊 <b>Stats for {caller}</b>\n",
         f"📞 Total Calls: <b>{total}</b>",
         f"✅ Winning: <b>{winning}</b>",
         f"❌ Losing: <b>{total - winning}</b>",
+        f"🔥 Current Streak: <b>{streak}</b>",
         f"🏆 Best Call: <b>${best[1]}</b> — <b>{fmt_x(best_mult)}</b>",
         f"   Entry: {fmt_usd(best[2])} → Now: {fmt_usd(best[3])}\n",
         "<b>Recent Calls:</b>"
@@ -340,6 +363,46 @@ async def handle_mystats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mult = r[5] / r[4] if r[4] else 1
         status = "🟢" if r[5] > r[4] else "🔴"
         lines.append(f"{status} <b>${r[1]}</b> — {fmt_x(mult)} {'(active)' if r[6] else '(dead)'}")
+
+    await msg.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def handle_groupstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.message
+
+    async with aiosqlite.connect(DB_FILE) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM calls")
+        total = (await cursor.fetchone())[0]
+
+        cursor = await db.execute("SELECT COUNT(*) FROM calls WHERE current_price > entry_price")
+        winning = (await cursor.fetchone())[0]
+
+        cursor = await db.execute("""
+        SELECT caller, COUNT(*) as cnt FROM calls
+        WHERE current_price > entry_price
+        GROUP BY caller ORDER BY cnt DESC LIMIT 1
+        """)
+        top_caller_row = await cursor.fetchone()
+
+        cursor = await db.execute("""
+        SELECT symbol, caller, entry_price, current_price FROM calls
+        ORDER BY (current_price/entry_price) DESC LIMIT 1
+        """)
+        best_call = await cursor.fetchone()
+
+    top_caller = top_caller_row[0] if top_caller_row else "N/A"
+    win_rate = int((winning / total) * 100) if total else 0
+
+    best_mult = best_call[3] / best_call[2] if best_call and best_call[2] else 0
+
+    lines = [
+        "📊 <b>Group Stats</b>\n",
+        f"📞 Total Calls: <b>{total}</b>",
+        f"✅ Winning Calls: <b>{winning}</b>",
+        f"📈 Win Rate: <b>{win_rate}%</b>",
+        f"👑 Top Caller: <b>{top_caller}</b>",
+        f"🏆 Best Call Ever: <b>${best_call[1] if best_call else 'N/A'}</b> — <b>{fmt_x(best_mult)}</b> by {best_call[2] if best_call else 'N/A'}" if best_call else "",
+    ]
 
     await msg.reply_text("\n".join(lines), parse_mode="HTML")
 
@@ -433,6 +496,10 @@ async def monitor_prices(app):
             for m in MILESTONES:
                 if multiplier >= m and m not in milestones:
                     milestones.append(m)
+                    # Mark as win
+                    async with aiosqlite.connect(DB_FILE) as db:
+                        await db.execute("UPDATE calls SET win=1 WHERE ca=?", (ca,))
+                        await db.commit()
                     alert = (
                         f"🚀 <b>{name} (${symbol}) hit {m}x!</b>\n\n"
                         f"📋 <code>{ca}</code>\n"
@@ -531,6 +598,57 @@ async def daily_top10(app):
             )
 
         try:
+            sent = await app.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
+            # Pin the top 10 message
+            await app.bot.pin_chat_message(chat_id=chat_id, message_id=sent.message_id,
+                                            disable_notification=True)
+        except Exception:
+            pass
+
+# ── WEEKLY LEADERBOARD ────────────────────────────────────────────────────────
+
+async def weekly_leaderboard(app):
+    while True:
+        now = datetime.now(SYDNEY_TZ)
+        # Next Monday 12PM
+        days_until_monday = (7 - now.weekday()) % 7 or 7
+        target = (now + timedelta(days=days_until_monday)).replace(
+            hour=12, minute=0, second=0, microsecond=0)
+        await asyncio.sleep((target - now).total_seconds())
+
+        now = datetime.now(SYDNEY_TZ)
+        cutoff = (now - timedelta(days=7)).isoformat()
+
+        async with aiosqlite.connect(DB_FILE) as db:
+            cursor = await db.execute("""
+            SELECT caller, COUNT(*) as total,
+                   SUM(CASE WHEN current_price > entry_price THEN 1 ELSE 0 END) as wins,
+                   MAX(current_price/entry_price) as best_mult,
+                   chat_id
+            FROM calls WHERE created_at >= ?
+            GROUP BY caller ORDER BY wins DESC, best_mult DESC LIMIT 10
+            """, (cutoff,))
+            rows = await cursor.fetchall()
+
+        if not rows:
+            continue
+
+        chat_id = rows[0][4]
+        medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+        lines = [
+            "🏆 <b>Weekly Leaderboard</b>",
+            f"📅 Week ending {now.strftime('%d %b %Y')}\n"
+        ]
+
+        for i, row in enumerate(rows):
+            caller, total, wins, best_mult, _ = row
+            win_rate = int((wins / total) * 100) if total else 0
+            lines.append(
+                f"{medals[i]} <b>{caller}</b>\n"
+                f"   ✅ {wins}/{total} wins ({win_rate}%) | 🏆 Best: {fmt_x(best_mult or 1)}"
+            )
+
+        try:
             await app.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
         except Exception:
             pass
@@ -542,12 +660,14 @@ async def post_init(app):
     asyncio.create_task(monitor_prices(app))
     asyncio.create_task(morning_summary(app))
     asyncio.create_task(daily_top10(app))
+    asyncio.create_task(weekly_leaderboard(app))
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(handle_copy, pattern=r"^copy:"))
     app.add_handler(CommandHandler("mystats", handle_mystats))
+    app.add_handler(CommandHandler("groupstats", handle_groupstats))
     print("✅ Solana Alpha Bot Running!")
     app.run_polling()
 
