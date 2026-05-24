@@ -945,7 +945,7 @@ export default function App(){
 
   if(!unlocked)return <PinScreen onUnlock={()=>setUnlocked(true)}/>;
 
-  return(
+  try { return(
     <div style={{display:"flex",minHeight:"100vh",background:"#000",
       fontFamily:"-apple-system,'SF Pro Display',sans-serif",color:"#fff",
       fontSize:"clamp(12px, 1vw, 14px)",overflowX:"hidden"}}>
@@ -1040,5 +1040,5 @@ export default function App(){
         </div>
       </div>
     </div>
-  );
+  ); } catch(e) { return <div style={{color:"#fff",padding:40,background:"#000",minHeight:"100vh"}}><h2>Error: {e.message}</h2><pre style={{marginTop:20,color:"#888",fontSize:12}}>{e.stack}</pre></div>; }
 }
