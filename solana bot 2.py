@@ -457,10 +457,10 @@ async def monitor_prices(app):
                 growth = (current_price - last_checked_price) / last_checked_price
                 if growth >= GROWTH_ALERT_THRESHOLD:
                     growth_msg = (
-                        f"📈 <b>${symbol} is pumping!</b>\n\n"
+                        f"📈 <b>PUMPING {fmt_pct(growth)} 📈</b>\n\n"
+                        f"🪙 <b>{name} (${symbol})</b>\n\n"
                         f"📋 <code>{ca}</code>\n"
-                        f"🏅 Called by {caller} @ <b>{fmt_usd(entry_mc)}</b> MC\n"
-                        f"🚀 Up <b>{fmt_pct(growth)}</b> in last 5 mins\n"
+                        f"🏅 {caller} @ <b>{fmt_usd(entry_mc)}</b> MC\n"
                         f"💰 Now: <b>{fmt_usd(current_mc)}</b> MC — <b>{fmt_x(multiplier)}</b> from entry\n\n"
                         f"{build_links(ca)}"
                     )
@@ -471,11 +471,12 @@ async def monitor_prices(app):
             if multiplier >= 2 and time_since_call <= 3600 and "lightning" not in milestones:
                 milestones.append("lightning")
                 lightning_msg = (
-                    f"⚡ <b>Lightning Call!</b>\n\n"
-                    f"<b>${symbol}</b> hit 2x in under 1 hour!\n"
+                    f"⚡ <b>LIGHTNING CALL ⚡</b>\n\n"
+                    f"🪙 <b>{name} (${symbol})</b>\n\n"
                     f"📋 <code>{ca}</code>\n"
-                    f"🏅 Called by {caller} @ <b>{fmt_usd(entry_mc)}</b> MC\n"
-                    f"📈 Now: <b>{fmt_usd(current_mc)}</b> MC\n\n"
+                    f"🏅 {caller} @ <b>{fmt_usd(entry_mc)}</b> MC\n"
+                    f"📈 2x in under 1 hour!\n"
+                    f"💰 Now: <b>{fmt_usd(current_mc)}</b> MC\n\n"
                     f"{build_links(ca)}"
                 )
                 await broadcast(app.bot, chat_id, lightning_msg)
@@ -488,9 +489,10 @@ async def monitor_prices(app):
                         await db.execute("UPDATE calls SET win=1 WHERE ca=?", (ca,))
                         await db.commit()
                     alert = (
-                        f"🚀 <b>{name} (${symbol}) hit {m}x!</b>\n\n"
+                        f"🚀 <b>{m}X HIT 🚀</b>\n\n"
+                        f"🪙 <b>{name} (${symbol})</b>\n\n"
                         f"📋 <code>{ca}</code>\n"
-                        f"🏅 First called by {caller} @ <b>{fmt_usd(entry_mc)}</b> MC\n"
+                        f"🏅 {caller} @ <b>{fmt_usd(entry_mc)}</b> MC\n"
                         f"📈 Now: <b>{fmt_usd(current_mc)}</b> MC — <b>{fmt_x(multiplier)}</b>\n\n"
                         f"{build_links(ca)}"
                     )
