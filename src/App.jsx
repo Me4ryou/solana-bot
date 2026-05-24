@@ -235,7 +235,7 @@ function Portfolio(){
     <div style={{display:"flex",flexDirection:"column",gap:20}}>
 
       {/* Top stats - compact */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"clamp(8px,1vw,16px)"}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"clamp(8px,1vw,16px)"}}>
         {[
           {label:"Total Wallet Value",value:`$${fmt(walletTotal)}`,sub:`A$${fmt(walletTotal*1.54)}`,accent:true},
           {label:"Meme Portfolio",value:`$${fmt(total)}`,sub:`A$${fmt(total*1.54)}`},
@@ -256,7 +256,7 @@ function Portfolio(){
       </div>
 
       {/* Chart + Wallet Pie */}
-      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"minmax(0,2fr) minmax(200px,1fr)",gap:16}}>
         <Card>
           <SectionTitle>Portfolio Value — 30 Days</SectionTitle>
           <ResponsiveContainer width="100%" height={180}>
@@ -834,7 +834,7 @@ export default function App(){
   return(
     <div style={{display:"flex",minHeight:"100vh",background:"#000",
       fontFamily:"-apple-system,'SF Pro Display',sans-serif",color:"#fff",
-      fontSize:"clamp(12px, 1vw, 14px)"}}>
+      fontSize:"clamp(12px, 1vw, 14px)",overflowX:"hidden"}}>
 
       <ToastContainer toasts={toasts} remove={id=>setToasts(t=>t.filter(x=>x.id!==id))}/>
 
@@ -897,7 +897,7 @@ export default function App(){
       </div>
 
       {/* MAIN */}
-      <div style={{marginLeft:"clamp(180px, 16vw, 220px)",flex:1,display:"flex",flexDirection:"column"}}>
+      <div style={{marginLeft:"clamp(180px, 16vw, 220px)",flex:1,display:"flex",flexDirection:"column",minWidth:0,overflowX:"hidden"}}>
 
         {/* TICKER */}
         <Ticker/>
@@ -919,7 +919,7 @@ export default function App(){
         </div>
 
         {/* PAGE */}
-        <div style={{padding:"clamp(12px,2vw,24px)"}}>
+        <div style={{padding:"clamp(12px,2vw,24px)",overflowX:"hidden"}}>
           {page==="portfolio"&&<Portfolio/>}
           {page==="trades"   &&<Trades/>}
           {page==="wallets"  &&<Wallets/>}
