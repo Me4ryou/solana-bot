@@ -202,7 +202,7 @@ function PinScreen({onUnlock}){
 
 // ── CARD ──────────────────────────────────────────────────────────────────────
 const Card=({children,style={}})=>(
-  <div style={{background:"#0d0d0d",border:"1px solid #1a1a1a",borderRadius:14,padding:20,...style}}>
+  <div style={{background:"#0d0d0d",border:"1px solid #1a1a1a",borderRadius:14,padding:"clamp(12px,1.5vw,20px)",...style}}>
     {children}
   </div>
 );
@@ -235,7 +235,7 @@ function Portfolio(){
     <div style={{display:"flex",flexDirection:"column",gap:20}}>
 
       {/* Top stats - compact */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"clamp(8px,1vw,16px)"}}>
         {[
           {label:"Total Wallet Value",value:`$${fmt(walletTotal)}`,sub:`A$${fmt(walletTotal*1.54)}`,accent:true},
           {label:"Meme Portfolio",value:`$${fmt(total)}`,sub:`A$${fmt(total*1.54)}`},
@@ -833,12 +833,13 @@ export default function App(){
 
   return(
     <div style={{display:"flex",minHeight:"100vh",background:"#000",
-      fontFamily:"-apple-system,'SF Pro Display',sans-serif",color:"#fff"}}>
+      fontFamily:"-apple-system,'SF Pro Display',sans-serif",color:"#fff",
+      fontSize:"clamp(12px, 1vw, 14px)"}}>
 
       <ToastContainer toasts={toasts} remove={id=>setToasts(t=>t.filter(x=>x.id!==id))}/>
 
       {/* SIDEBAR */}
-      <div style={{width:230,background:"#080808",borderRight:"1px solid #1a1a1a",
+      <div style={{width:"clamp(180px, 16vw, 220px)",background:"#080808",borderRight:"1px solid #1a1a1a",
         display:"flex",flexDirection:"column",position:"fixed",height:"100vh",zIndex:10}}>
 
         {/* Logo */}
@@ -896,7 +897,7 @@ export default function App(){
       </div>
 
       {/* MAIN */}
-      <div style={{marginLeft:230,flex:1,display:"flex",flexDirection:"column"}}>
+      <div style={{marginLeft:"clamp(180px, 16vw, 220px)",flex:1,display:"flex",flexDirection:"column"}}>
 
         {/* TICKER */}
         <Ticker/>
@@ -918,7 +919,7 @@ export default function App(){
         </div>
 
         {/* PAGE */}
-        <div style={{padding:28}}>
+        <div style={{padding:"clamp(12px,2vw,24px)"}}>
           {page==="portfolio"&&<Portfolio/>}
           {page==="trades"   &&<Trades/>}
           {page==="wallets"  &&<Wallets/>}
