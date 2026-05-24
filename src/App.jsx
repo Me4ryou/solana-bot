@@ -66,21 +66,40 @@ function LiveDataProvider({ children }) {
         });
         const tokData = await tokRes.json();
         const accounts = tokData?.result?.value || [];
-        const tokens = accounts
-          .map(a => {
+
+        // Fetch metadata + price for each token
+        const tokens = (await Promise.all(
+          accounts.map(async a => {
             const info = a.account.data.parsed.info;
-            const known = KNOWN_TOKENS[info.mint];
+            const mint = info.mint;
             const amount = parseFloat(info.tokenAmount.uiAmount || 0);
+            if(amount <= 0) return null;
+            const known = KNOWN_TOKENS[mint];
+            let symbol = known?.symbol || null;
+            let name   = known?.name   || null;
+            let price  = known?.price  || 0;
+            // Try DexScreener for price + name
+            if(!symbol || price === 0) {
+              try {
+                const dr = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
+                const dd = await dr.json();
+                const pair = dd?.pairs?.[0];
+                if(pair){
+                  symbol = symbol || pair.baseToken?.symbol || mint.slice(0,6);
+                  name   = name   || pair.baseToken?.name   || "Unknown";
+                  price  = parseFloat(pair.priceUsd || 0);
+                }
+              } catch {}
+            }
             return {
-              symbol: known?.symbol || info.mint.slice(0,6)+"...",
-              name:   known?.name   || "Unknown Token",
-              amount, mint: info.mint,
-              value: amount * (known?.price || 0),
+              symbol: symbol || mint.slice(0,6)+"...",
+              name:   name   || "Unknown Token",
+              amount, mint,
+              value: amount * price,
               color: "#888",
             };
           })
-          .filter(t => t.amount > 0)
-          .sort((a,b) => b.value - a.value);
+        )).filter(Boolean).sort((a,b) => b.value - a.value);
 
         // SOL price
         let solPrice = 182.6;
@@ -98,12 +117,37 @@ function LiveDataProvider({ children }) {
           if (fd?.rates?.AUD) audRate = fd.rates.AUD;
         } catch {}
 
-        // Trade history
+        // Trade history with metadata
         let trades = [];
         try {
           const txRes = await fetch(`https://api.helius.xyz/v0/addresses/${WALLET}/transactions?api-key=${HELIUS_API_KEY}&limit=100`);
           const txData = await txRes.json();
           if (Array.isArray(txData)) {
+            // Collect unique mints for batch metadata lookup
+            const mints = new Set();
+            txData.forEach(tx => {
+              (tx.tokenTransfers||[]).forEach(t => { if(t.mint) mints.add(t.mint); });
+            });
+
+            // Fetch DexScreener metadata for unknown tokens
+            const mintMeta = {};
+            await Promise.all([...mints].map(async mint => {
+              if(KNOWN_TOKENS[mint]){ mintMeta[mint]=KNOWN_TOKENS[mint]; return; }
+              try {
+                const dr = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
+                const dd = await dr.json();
+                const pair = dd?.pairs?.[0];
+                if(pair){
+                  mintMeta[mint] = {
+                    symbol: pair.baseToken?.symbol || mint.slice(0,6),
+                    name:   pair.baseToken?.name   || "Unknown",
+                    mc:     parseFloat(pair.marketCap || pair.fdv || 0),
+                    price:  parseFloat(pair.priceUsd || 0),
+                  };
+                }
+              } catch {}
+            }));
+
             trades = txData
               .filter(tx => tx.tokenTransfers && tx.tokenTransfers.length >= 2)
               .map(tx => {
@@ -112,29 +156,40 @@ function LiveDataProvider({ children }) {
                 const sent = transfers.find(t => t.fromUserAccount === WALLET);
                 if (!received) return null;
                 const date = new Date(tx.timestamp * 1000);
-                const known = KNOWN_TOKENS[received.mint];
+                const meta = mintMeta[received.mint] || {};
                 const amountInvested = parseFloat(sent?.tokenAmount || 0);
                 const sentSym = sent?.symbol || "SOL";
                 const investedUSD = sentSym === "SOL" ? amountInvested * solPrice : amountInvested;
+                const amountBought = parseFloat(received.tokenAmount || 0);
+                const entryPrice = amountBought > 0 ? investedUSD / amountBought : 0;
+                const currentPrice = meta.price || 0;
+                const currentValue = amountBought * currentPrice;
+                const pnl = currentValue - investedUSD;
+                const pct = investedUSD > 0 ? ((pnl/investedUSD)*100).toFixed(1) : "0";
+                const mult = investedUSD > 0 ? (currentValue/investedUSD).toFixed(2)+"x" : "?";
                 return {
-                  symbol: known?.symbol || received.symbol || received.mint?.slice(0,6) || "?",
-                  name: known?.name || received.tokenName || received.symbol || "Unknown Token",
+                  symbol: meta.symbol || received.symbol || received.mint?.slice(0,6) || "?",
+                  name:   meta.name   || received.tokenName || received.symbol || "Unknown Token",
                   date: date.toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"}),
                   time: date.toLocaleTimeString("en-AU",{hour:"2-digit",minute:"2-digit"}),
-                  amountBought: parseFloat(received.tokenAmount || 0),
+                  amountBought,
                   amountInvested: investedUSD,
-                  amountReturned: investedUSD,
+                  amountReturned: currentValue,
                   sentSymbol: sentSym,
                   tx: tx.signature,
                   status: "closed",
-                  mult: "?",
-                  pnl: 0,
-                  entryPrice: received.tokenAmount > 0 ? investedUSD / parseFloat(received.tokenAmount) : 0,
+                  mult,
+                  pnl,
+                  pct,
+                  entryPrice,
+                  currentPrice,
+                  entryMC: meta.mc || 0,
+                  currentMC: meta.mc || 0,
                 };
               })
               .filter(Boolean);
           }
-        } catch {}
+        } catch(e) { console.log("Trade fetch error:", e); }
 
         if (!mounted) return;
         setData({ solBalance, tokens, trades, solPrice, audRate, loading:false, error:null });
@@ -299,7 +354,7 @@ const SectionTitle = ({children}) => (
 );
 
 // ── TICKER ────────────────────────────────────────────────────────────────────
-function Ticker(){
+function Ticker({data=TICKER}){
   const ref = useRef(null);
   const dragging = useRef(false);
   const startX = useRef(0);
@@ -319,7 +374,7 @@ function Ticker(){
         position:"sticky",top:0,zIndex:9,cursor:"grab",scrollbarWidth:"none",userSelect:"none"}}>
       <div style={{display:"flex",gap:48,whiteSpace:"nowrap",paddingLeft:20,paddingRight:20,
         animation:paused?"none":"ticker 28s linear infinite"}}>
-        {[...TICKER,...TICKER,...TICKER].map((coin,i)=>(
+        {[...data,...data,...data].map((coin,i)=>(
           <span key={i} style={{fontSize:11,display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
             <span style={{color:"#444"}}>{coin.s}</span>
             <span style={{color:"#888",fontFamily:"monospace"}}>${coin.p.toLocaleString()}</span>
@@ -417,7 +472,7 @@ function Portfolio(){
                   <Cell key={i} fill={walletPieData.length>0?liveWalletAssets[i]?.color||WALLET_PIE_COLORS[i]:"#222"}/>
                 ))}
               </Pie>
-              <Tooltip formatter={(v,n)=>[`$${fmt(v)}`,n]} contentStyle={{background:"#111",border:"1px solid #222",borderRadius:8,fontSize:11}}/>
+              <Tooltip formatter={(v,n)=>[`$${fmt(v)}`,n]} contentStyle={{background:"#1a1a1a",border:"1px solid #333",borderRadius:8,fontSize:11,color:"#fff"}} itemStyle={{color:"#f5a623"}} labelStyle={{color:"#888"}}/>
             </PieChart>
           </ResponsiveContainer>
           <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:8,maxHeight:120,overflowY:"auto"}}>
@@ -506,23 +561,39 @@ function TradeDetail({tr,onBack}){
         )}
       </div>
 
-      {/* Summary */}
-      <div style={{background:"linear-gradient(135deg,#f5a62318,#f5a62305)",
-        border:"1px solid #f5a62333",borderRadius:14,padding:"20px 24px"}}>
-        <div style={{fontSize:11,color:"#444",textTransform:"uppercase",letterSpacing:0.5,marginBottom:12}}>Trade Summary</div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))",gap:16}}>
-          {[
-            {l:"Token",v:tr.symbol||"?"},
-            {l:"Amount Bought",v:tr.amountBought?Number(tr.amountBought).toLocaleString():"N/A"},
-            {l:"Amount Paid",v:`${fmt(tr.amountInvested||0,4)} ${tr.sentSymbol||"SOL"}`},
-            {l:"Entry Price",v:tr.entryPrice?`$${tr.entryPrice.toFixed(8)}`:"N/A"},
-          ].map((s,i)=>(
-            <div key={i}>
-              <div style={{fontSize:10,color:"#555",marginBottom:4,textTransform:"uppercase"}}>{s.l}</div>
-              <div style={{fontSize:16,fontWeight:700,color:"#fff"}}>{s.v}</div>
-            </div>
-          ))}
+      {/* PnL Hero */}
+      <div style={{background:tr.pnl>=0?"linear-gradient(135deg,#30d15818,#30d15805)":"linear-gradient(135deg,#ff453a18,#ff453a05)",
+        border:`1px solid ${tr.pnl>=0?"#30d15833":"#ff453a33"}`,borderRadius:14,padding:"20px 24px",
+        display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:16}}>
+        <div>
+          <div style={{fontSize:11,color:"#444",textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Unrealised PnL</div>
+          <div style={{fontSize:36,fontWeight:700,color:pnlCol(tr.pnl||0),letterSpacing:-1}}>
+            {(tr.pnl||0)>=0?"+":""}{fmtUSD(Math.abs(tr.pnl||0))}
+          </div>
+          <div style={{fontSize:14,color:pnlCol(tr.pnl||0),marginTop:4}}>{tr.pct||"0"}% · {tr.mult||"?"}</div>
         </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:11,color:"#444",textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Invested → Current Value</div>
+          <div style={{fontSize:20,fontWeight:700,color:"#fff"}}>{fmtUSD(tr.amountInvested||0)}</div>
+          <div style={{fontSize:16,color:pnlCol(tr.pnl||0),marginTop:2}}>→ {fmtUSD(tr.amountReturned||0)}</div>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12}}>
+        {[
+          {l:"Entry MC",     v:tr.entryMC?fmtUSD(tr.entryMC):"N/A"},
+          {l:"Current MC",   v:tr.currentMC?fmtUSD(tr.currentMC):"N/A"},
+          {l:"Amount Bought",v:tr.amountBought?Number(tr.amountBought).toLocaleString():"N/A"},
+          {l:"Amount Paid",  v:`${fmt(tr.amountInvested||0,4)} ${tr.sentSymbol||"SOL"}`},
+          {l:"Entry Price",  v:tr.entryPrice?`$${Number(tr.entryPrice).toFixed(8)}`:"N/A"},
+          {l:"Return %",     v:tr.pct?`${tr.pct}%`:"N/A", color:pnlCol(tr.pnl||0)},
+        ].map((s,i)=>(
+          <div key={i} style={{background:"#111",border:"1px solid #1a1a1a",borderRadius:12,padding:"14px 16px"}}>
+            <div style={{fontSize:10,color:"#333",textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>{s.l}</div>
+            <div style={{fontSize:16,fontWeight:700,color:s.color||"#fff"}}>{s.v}</div>
+          </div>
+        ))}
       </div>
 
       {/* MC Journey placeholder */}
@@ -599,7 +670,7 @@ function Trades(){
         <SectionTitle>Trade Log — Click any trade for full details</SectionTitle>
         <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr auto",gap:12,
           borderBottom:"1px solid #1a1a1a",paddingBottom:8,marginBottom:8}}>
-          {["Token","Date","Amount Paid","Status",""].map(h=>(
+          {["Token","Date","Multiplier","PnL",""].map(h=>(
             <div key={h} style={{fontSize:10,color:"#333",textTransform:"uppercase",letterSpacing:0.5}}>{h}</div>
           ))}
         </div>
@@ -619,9 +690,8 @@ function Trades(){
               <div style={{fontSize:10,color:"#444"}}>{tr.name||"Unknown"}</div>
             </div>
             <div style={{fontSize:12,color:"#444"}}>{tr.date||"—"}</div>
-            <div style={{fontSize:12,color:"#888"}}>{fmt(tr.amountInvested||0,4)} {tr.sentSymbol||"SOL"}</div>
-            <span style={{padding:"3px 10px",borderRadius:20,fontSize:10,fontWeight:600,
-              background:"#f5a62318",color:"#f5a623"}}>{tr.status||"closed"}</span>
+            <div style={{fontSize:13,fontWeight:700,color:"#f5a623"}}>{tr.mult||"?"}</div>
+            <div style={{fontSize:12,fontWeight:600,color:pnlCol(tr.pnl||0)}}>{(tr.pnl||0)>=0?"+":""}{fmtUSD(Math.abs(tr.pnl||0))}</div>
             <a href={`https://solscan.io/tx/${tr.tx}`} target="_blank" rel="noopener noreferrer"
               onClick={e=>e.stopPropagation()}
               style={{display:"flex",alignItems:"center",justifyContent:"center",
@@ -1002,6 +1072,30 @@ function AppContent(){
   const [toasts,setToasts] = useState([]);
   const [notificationsOn,setNotificationsOn] = useState(true);
   const [currency,setCurrency] = useState("AUD");
+  const [liveTicker,setLiveTicker] = useState(TICKER);
+
+  // Fetch live ticker prices
+  useEffect(()=>{
+    async function fetchPrices(){
+      try {
+        const ids = "bitcoin,ethereum,solana,binancecoin,ripple,dogecoin,cardano";
+        const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`);
+        const data = await res.json();
+        const map = {
+          BTC: data.bitcoin, ETH: data.ethereum, SOL: data.solana,
+          BNB: data.binancecoin, XRP: data.ripple, DOGE: data.dogecoin, ADA: data.cardano,
+        };
+        setLiveTicker(TICKER.map(t=>({
+          ...t,
+          p: map[t.s]?.usd || t.p,
+          c: parseFloat((map[t.s]?.usd_24h_change || t.c).toFixed(2)),
+        })));
+      } catch {}
+    }
+    fetchPrices();
+    const interval = setInterval(fetchPrices, 60000);
+    return () => clearInterval(interval);
+  },[]);
 
   const addToast = useCallback(()=>{
     if(!notificationsOn) return;
@@ -1080,7 +1174,7 @@ function AppContent(){
 
       {/* MAIN */}
       <div style={{marginLeft:"clamp(180px,16vw,220px)",flex:1,display:"flex",flexDirection:"column",minWidth:0,overflowX:"hidden"}}>
-        <Ticker/>
+        <Ticker data={liveTicker}/>
 
         {/* Header */}
         <div style={{padding:"20px 28px 0",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
