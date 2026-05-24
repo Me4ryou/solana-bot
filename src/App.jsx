@@ -35,37 +35,55 @@ function useLiveData() {
         const lamports = balData?.result?.value || 0;
         setSolBalance(lamports / 1e9);
 
-        // Fetch token accounts
-        const tokRes = await fetch(HELIUS_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jsonrpc: "2.0", id: 2,
-            method: "getTokenAccountsByOwner",
-            params: [WALLET,
-              { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
-              { encoding: "jsonParsed" }
-            ]
-          })
-        });
-        const tokData = await tokRes.json();
-        const accounts = tokData?.result?.value || [];
-        const tokenList = accounts
-          .map(a => ({
-            mint: a.account.data.parsed.info.mint,
-            amount: parseFloat(a.account.data.parsed.info.tokenAmount.uiAmount || 0),
-            decimals: a.account.data.parsed.info.tokenAmount.decimals,
-          }))
-          .filter(t => t.amount > 0);
-        setTokens(tokenList);
+        // Fetch token balances with metadata using Helius
+        try {
+          const tokRes = await fetch(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              jsonrpc: "2.0", id: 2,
+              method: "getAssetsByOwner",
+              params: {
+                ownerAddress: WALLET,
+                page: 1,
+                limit: 50,
+                displayOptions: { showFungible: true, showNativeBalance: true }
+              }
+            })
+          });
+          const tokData = await tokRes.json();
+          const items = tokData?.result?.items || [];
+          const fungibles = items
+            .filter(item => item.interface === "FungibleToken" || item.interface === "FungibleAsset")
+            .map(item => ({
+              symbol: item.content?.metadata?.symbol || item.id?.slice(0,6) || "?",
+              name: item.content?.metadata?.name || "Unknown",
+              amount: item.token_info?.balance ? item.token_info.balance / Math.pow(10, item.token_info.decimals || 0) : 0,
+              price: item.token_info?.price_info?.price_per_token || 0,
+              value: item.token_info?.price_info?.total_price || 0,
+              mint: item.id,
+              image: item.content?.links?.image || null,
+            }))
+            .filter(t => t.amount > 0 && t.value > 0.01)
+            .sort((a,b) => b.value - a.value);
+          setTokens(fungibles);
+        } catch(e) {
+          console.log("Token fetch error:", e);
+        }
 
-        // Fetch SOL price from DexScreener
-        const priceRes = await fetch("https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112");
-        const priceData = await priceRes.json();
-        const pairs = priceData?.pairs;
-        if (pairs && pairs.length > 0) {
-          const p = parseFloat(pairs[0].priceUsd);
-          if (p > 0) setSolPrice(p);
+        // Fetch SOL price from CoinGecko (free, no key needed)
+        try {
+          const priceRes = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd");
+          const priceData = await priceRes.json();
+          if (priceData?.solana?.usd) setSolPrice(priceData.solana.usd);
+        } catch(e) {
+          // fallback - try DexScreener
+          try {
+            const priceRes2 = await fetch("https://api.dexscreener.com/latest/dex/pairs/solana/83v8iPyZihDEjDdY8RdZddyZNyUtXngz69Lgo9Kt5d6Q");
+            const priceData2 = await priceRes2.json();
+            const p = parseFloat(priceData2?.pair?.priceUsd);
+            if (p > 0) setSolPrice(p);
+          } catch(e2) {}
         }
 
         // Fetch AUD rate
@@ -318,10 +336,20 @@ function Portfolio(){
   const total=HOLDINGS.reduce((s,h)=>s+h.value,0);
   const totalPnl=HOLDINGS.reduce((s,h)=>s+h.pnl,0);
 
-  // Build wallet assets with live SOL balance
+  // Build wallet assets with live data
+  const liveTokenAssets = tokens.length > 0
+    ? tokens.map((t, i) => ({
+        symbol: t.symbol,
+        name: t.name,
+        value: t.value,
+        amount: t.amount,
+        color: PIE_COLORS[i % PIE_COLORS.length],
+      }))
+    : WALLET_ASSETS.slice(1);
+
   const liveWalletAssets = [
-    {...WALLET_ASSETS[0], value: solUSD, amount: solBal},
-    ...WALLET_ASSETS.slice(1),
+    {symbol:"SOL", name:"Solana", value: solUSD, amount: solBal, color:"#9945ff"},
+    ...liveTokenAssets,
   ];
   const walletTotal=liveWalletAssets.reduce((s,a)=>s+a.value,0);
   const walletPieData=liveWalletAssets.map(a=>({name:a.symbol,value:a.value}));
