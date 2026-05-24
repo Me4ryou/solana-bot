@@ -453,7 +453,7 @@ function Portfolio(){
             <div key={h} style={{fontSize:10,color:"#333",textTransform:"uppercase",letterSpacing:0.5}}>{h}</div>
           ))}
         </div>
-        {WALLET_ASSETS.map((a,i)=>(
+        {liveWalletAssets.map((a,i)=>(
           <div key={i} style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",
             gap:12,padding:"10px 0",borderBottom:"1px solid #111",alignItems:"center"}}>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -470,7 +470,7 @@ function Portfolio(){
               {a.amount>=1000?a.amount.toLocaleString():fmt(a.amount,a.amount<1?4:2)}
             </div>
             <div style={{fontSize:13,fontWeight:600,color:"#ccc"}}>${fmt(a.value)}</div>
-            <div style={{fontSize:13,color:"#555"}}>A${fmt(a.value*1.54)}</div>
+            <div style={{fontSize:13,color:"#555"}}>A${fmt(a.value*audRate)}</div>
           </div>
         ))}
         <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",gap:12,
@@ -478,7 +478,7 @@ function Portfolio(){
           <div style={{fontSize:12,fontWeight:700,color:"#fff"}}>Total</div>
           <div/>
           <div style={{fontSize:13,fontWeight:700,color:"#f5a623"}}>${fmt(walletTotal)}</div>
-          <div style={{fontSize:13,fontWeight:600,color:"#888"}}>A${fmt(walletTotal*1.54)}</div>
+          <div style={{fontSize:13,fontWeight:600,color:"#888"}}>A${fmt(walletTotal*audRate)}</div>
         </div>
       </Card>
 
