@@ -109,34 +109,59 @@ function useLiveData() {
         // Fetch transaction history for trade detection
         try {
           const txRes = await fetch(
-            `https://api.helius.xyz/v0/addresses/${WALLET}/transactions?api-key=${HELIUS_API_KEY}&limit=50&type=SWAP`
+            `https://api.helius.xyz/v0/addresses/${WALLET}/transactions?api-key=${HELIUS_API_KEY}&limit=100`
           );
           const txData = await txRes.json();
           if (Array.isArray(txData)) {
-            const trades = txData
-              .filter(tx => tx.type === "SWAP" && tx.tokenTransfers && tx.tokenTransfers.length > 0)
+            const swaps = txData
+              .filter(tx => (tx.type === "SWAP" || tx.type === "TOKEN_SWAP" || tx.type === "UNKNOWN") 
+                && tx.tokenTransfers && tx.tokenTransfers.length >= 2)
               .map(tx => {
                 const transfers = tx.tokenTransfers || [];
-                // Find what was received (bought) and what was sent (sold)
-                const received = transfers.find(t => t.toUserAccount === WALLET);
+                const nativeTransfers = tx.nativeTransfers || [];
+                
+                // Find received token (what we bought)
+                const received = transfers.find(t => 
+                  t.toUserAccount === WALLET && t.mint !== "So11111111111111111111111111111111111111112"
+                );
+                // Find sent token or SOL (what we paid)
                 const sent = transfers.find(t => t.fromUserAccount === WALLET);
+                const solSent = nativeTransfers.find(t => t.fromUserAccount === WALLET);
+                
+                if (!received) return null;
+                
                 const date = new Date(tx.timestamp * 1000);
+                const amountInvested = sent?.tokenAmount || (solSent?.amount / 1e9) || 0;
+                const sentSym = sent?.symbol || "SOL";
+                
+                // Estimate USD value (rough)
+                const solPriceEst = 182;
+                const investedUSD = sentSym === "SOL" ? amountInvested * solPriceEst : amountInvested;
+                
                 return {
-                  symbol: received?.symbol || received?.mint?.slice(0,6) || "?",
-                  name: received?.tokenName || received?.symbol || "Unknown",
+                  symbol: received.symbol || received.mint?.slice(0,6) || "?",
+                  name: received.tokenName || received.symbol || "Unknown Token",
                   date: date.toLocaleDateString("en-AU", {day:"numeric",month:"short",year:"numeric"}),
-                  amountBought: received?.tokenAmount || 0,
-                  amountSent: sent?.tokenAmount || 0,
-                  sentSymbol: sent?.symbol || "SOL",
-                  amountInvested: sent?.tokenAmount || 0,
+                  amountBought: received.tokenAmount || 0,
+                  amountInvested: investedUSD,
+                  amountReturned: investedUSD, // unknown without exit tx
+                  sentSymbol: sentSym,
                   tx: tx.signature,
                   status: "closed",
                   mult: "?",
                   pnl: 0,
+                  entryPrice: received.tokenAmount > 0 ? investedUSD / received.tokenAmount : 0,
+                  exitPrice: null,
+                  entryMC: "N/A",
+                  exitMC: "N/A",
+                  vol24h: "N/A",
+                  duration: "N/A",
+                  roi: "N/A",
                 };
               })
-              .filter(t => t.symbol !== "?");
-            setTrades(trades);
+              .filter(t => t && t.symbol !== "?")
+              .slice(0, 20);
+            setTrades(swaps);
           }
         } catch(e) {
           console.log("Trade fetch error:", e);
