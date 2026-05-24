@@ -1,6 +1,6 @@
 """
 Solana Alpha Telegram Bot — Final Version
-Fixed: Only alert on new highs, ignore drops, track peak multiplier
+Fixed: All alerts now mirror to Sol Signals channel
 """
 
 import os
@@ -57,6 +57,25 @@ async def init_db():
         """)
         await db.commit()
 
+# ── BROADCAST HELPER ──────────────────────────────────────────────────────────
+
+async def broadcast(bot, chat_id: int, text: str, image: str = None, keyboard=None):
+    """Send message to both group and channel."""
+    for target in [chat_id, CHANNEL_ID]:
+        try:
+            if image:
+                await bot.send_photo(chat_id=target, photo=image,
+                                     caption=text, parse_mode="HTML", reply_markup=keyboard)
+            else:
+                await bot.send_message(chat_id=target, text=text,
+                                       parse_mode="HTML", reply_markup=keyboard)
+        except Exception:
+            try:
+                await bot.send_message(chat_id=target, text=text,
+                                       parse_mode="HTML", reply_markup=keyboard)
+            except Exception:
+                pass
+
 # ── FORMATTERS ────────────────────────────────────────────────────────────────
 
 def fmt_usd(val) -> str:
@@ -100,13 +119,6 @@ def build_links(ca: str) -> str:
     terminal = f"https://terminal.padre.trade/terminal/{ca}"
     gmgn = f"https://gmgn.ai/sol/token/{ca}"
     return f'🔗 <a href="{axiom}">Axiom</a> | <a href="{terminal}">Terminal</a> | <a href="{gmgn}">GMGN</a>'
-
-def next_milestone(current_mult: float, milestones_hit: list) -> int | None:
-    """Returns the next milestone above current multiplier that hasn't been hit."""
-    for m in MILESTONES:
-        if m not in milestones_hit and current_mult >= m:
-            return m
-    return None
 
 # ── API FETCHERS ──────────────────────────────────────────────────────────────
 
@@ -247,7 +259,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     ca = matches[0]
 
-    # Auto delete original CA message
     try:
         await msg.delete()
     except Exception:
@@ -289,27 +300,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     streak_msg = f"\n🔥 <b>{caller} is on a {streak} win streak!</b>" if streak >= 2 else ""
     full_text = text + streak_msg
 
-    try:
-        if image:
-            await context.bot.send_photo(chat_id=msg.chat_id, photo=image,
-                                          caption=full_text, parse_mode="HTML", reply_markup=keyboard)
-        else:
-            await context.bot.send_message(chat_id=msg.chat_id, text=full_text,
-                                            parse_mode="HTML", reply_markup=keyboard)
-    except Exception:
-        await context.bot.send_message(chat_id=msg.chat_id, text=full_text,
-                                        parse_mode="HTML", reply_markup=keyboard)
-
-    # Mirror to channel
-    try:
-        if image:
-            await context.bot.send_photo(chat_id=CHANNEL_ID, photo=image,
-                                          caption=full_text, parse_mode="HTML", reply_markup=keyboard)
-        else:
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=full_text,
-                                            parse_mode="HTML", reply_markup=keyboard)
-    except Exception:
-        pass
+    await broadcast(context.bot, msg.chat_id, full_text, image, keyboard)
 
     price = float(token.get("price") or 0)
     mc = float(token.get("mc") or 0)
@@ -448,7 +439,6 @@ async def monitor_prices(app):
                     async with aiosqlite.connect(DB_FILE) as db:
                         await db.execute("UPDATE calls SET active=0 WHERE ca=?", (ca,))
                         await db.commit()
-                    # Only announce dead if it never hit a milestone
                     if not milestones:
                         dead_msg = (
                             f"💀 <b>${symbol} is dead</b>\n\n"
@@ -456,18 +446,13 @@ async def monitor_prices(app):
                             f"🏅 Called by {caller} @ <b>{fmt_usd(entry_mc)}</b> MC\n"
                             f"📉 Never hit a milestone."
                         )
-                        try:
-                            await app.bot.send_message(chat_id=chat_id, text=dead_msg, parse_mode="HTML")
-                        except Exception:
-                            pass
+                        await broadcast(app.bot, chat_id, dead_msg)
                     continue
 
             multiplier = current_price / entry_price if entry_price else 1
-
-            # Update peak multiplier
             new_peak = max(peak_multiplier, multiplier)
 
-            # 5 min growth alert — only if growing from last check
+            # 5 min growth alert
             if last_checked_price and last_checked_price > 0:
                 growth = (current_price - last_checked_price) / last_checked_price
                 if growth >= GROWTH_ALERT_THRESHOLD:
@@ -479,10 +464,7 @@ async def monitor_prices(app):
                         f"💰 Now: <b>{fmt_usd(current_mc)}</b> MC — <b>{fmt_x(multiplier)}</b> from entry\n\n"
                         f"{build_links(ca)}"
                     )
-                    try:
-                        await app.bot.send_message(chat_id=chat_id, text=growth_msg, parse_mode="HTML")
-                    except Exception:
-                        pass
+                    await broadcast(app.bot, chat_id, growth_msg)
 
             # Lightning call
             time_since_call = (now - created_at).total_seconds()
@@ -496,12 +478,9 @@ async def monitor_prices(app):
                     f"📈 Now: <b>{fmt_usd(current_mc)}</b> MC\n\n"
                     f"{build_links(ca)}"
                 )
-                try:
-                    await app.bot.send_message(chat_id=chat_id, text=lightning_msg, parse_mode="HTML")
-                except Exception:
-                    pass
+                await broadcast(app.bot, chat_id, lightning_msg)
 
-            # Milestones — ONLY alert on new highs above previous peak
+            # Milestones — only on new highs
             for m in MILESTONES:
                 if m not in milestones and multiplier >= m and multiplier >= peak_multiplier:
                     milestones.append(m)
@@ -515,10 +494,7 @@ async def monitor_prices(app):
                         f"📈 Now: <b>{fmt_usd(current_mc)}</b> MC — <b>{fmt_x(multiplier)}</b>\n\n"
                         f"{build_links(ca)}"
                     )
-                    try:
-                        await app.bot.send_message(chat_id=chat_id, text=alert, parse_mode="HTML")
-                    except Exception:
-                        pass
+                    await broadcast(app.bot, chat_id, alert)
 
             async with aiosqlite.connect(DB_FILE) as db:
                 await db.execute("""
@@ -573,10 +549,7 @@ async def morning_summary(app):
                 _, _, name, symbol, caller, entry_price, current_price, entry_mc, current_mc, peak_mult, _ = row
                 lines.append(f"  <b>${symbol}</b> — peaked at {fmt_x(peak_mult)} | 👤 {caller}")
 
-        try:
-            await app.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
-        except Exception:
-            pass
+        await broadcast(app.bot, chat_id, "\n".join(lines))
 
 # ── DAILY TOP 10 ──────────────────────────────────────────────────────────────
 
@@ -619,10 +592,16 @@ async def daily_top10(app):
                 f"   <code>{ca[:20]}...</code>"
             )
 
+        msg_text = "\n".join(lines)
         try:
-            sent = await app.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
+            sent = await app.bot.send_message(chat_id=chat_id, text=msg_text, parse_mode="HTML")
             await app.bot.pin_chat_message(chat_id=chat_id, message_id=sent.message_id,
                                             disable_notification=True)
+        except Exception:
+            pass
+        # Also send to channel
+        try:
+            await app.bot.send_message(chat_id=CHANNEL_ID, text=msg_text, parse_mode="HTML")
         except Exception:
             pass
 
@@ -668,10 +647,7 @@ async def weekly_leaderboard(app):
                 f"   ✅ {wins}/{total} wins ({win_rate}%) | 🏆 Best: {fmt_x(best_mult or 1)}"
             )
 
-        try:
-            await app.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
-        except Exception:
-            pass
+        await broadcast(app.bot, chat_id, "\n".join(lines))
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 
