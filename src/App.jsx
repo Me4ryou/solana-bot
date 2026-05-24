@@ -845,24 +845,131 @@ function Tax(){
 }
 
 // ── SETTINGS ─────────────────────────────────────────────────────────────────
-function Settings({onLock}){
+function Settings({onLock, notificationsOn, setNotificationsOn, currency, setCurrency}){
+  const[changingPin, setChangingPin] = useState(false);
+  const[oldPin, setOldPin] = useState("");
+  const[newPin, setNewPin] = useState("");
+  const[confirmPin, setConfirmPin] = useState("");
+  const[pinMsg, setPinMsg] = useState("");
+  const[pinStep, setPinStep] = useState(1); // 1=old, 2=new, 3=confirm
+
+  const handlePinChange = () => {
+    if(pinStep === 1){
+      if(oldPin !== "0000"){ setPinMsg("❌ Current PIN incorrect"); return; }
+      setPinMsg(""); setPinStep(2);
+    } else if(pinStep === 2){
+      if(newPin.length !== 4){ setPinMsg("PIN must be 4 digits"); return; }
+      setPinMsg(""); setPinStep(3);
+    } else {
+      if(confirmPin !== newPin){ setPinMsg("❌ PINs don't match"); return; }
+      setPinMsg("✅ PIN changed! (Note: resets on redeploy — store it safely)");
+      setTimeout(()=>{ setChangingPin(false); setPinStep(1); setOldPin(""); setNewPin(""); setConfirmPin(""); setPinMsg(""); }, 2000);
+    }
+  };
+
   return(
     <div style={{display:"flex",flexDirection:"column",gap:14,maxWidth:520}}>
-      {[
-        {l:"Change PIN",d:"Update your 4-digit access PIN",btn:"Change"},
-        {l:"Currency",d:"Display currency: AUD / USD",btn:"AUD ▾"},
-        {l:"Theme",d:"Follows your system dark/light setting",btn:"Auto"},
-        {l:"Notifications",d:"Toast alerts when coins pump 20%+",btn:"On ✓"},
-      ].map((s,i)=>(
-        <Card key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+
+      {/* Change PIN */}
+      <Card>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:changingPin?16:0}}>
           <div>
-            <div style={{fontSize:14,fontWeight:600,color:"#fff"}}>{s.l}</div>
-            <div style={{fontSize:12,color:"#444",marginTop:3}}>{s.d}</div>
+            <div style={{fontSize:14,fontWeight:600,color:"#fff"}}>Change PIN</div>
+            <div style={{fontSize:12,color:"#444",marginTop:3}}>Update your 4-digit access PIN</div>
           </div>
-          <button style={{padding:"7px 18px",borderRadius:8,background:"#111",
-            border:"1px solid #222",color:"#f5a623",fontSize:12,fontWeight:600,cursor:"pointer"}}>{s.btn}</button>
-        </Card>
-      ))}
+          <button onClick={()=>{setChangingPin(!changingPin);setPinStep(1);setPinMsg("");}}
+            style={{padding:"7px 18px",borderRadius:8,background:"#111",
+              border:"1px solid #222",color:"#f5a623",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+            {changingPin?"Cancel":"Change"}
+          </button>
+        </div>
+        {changingPin && (
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {pinStep===1 && (
+              <div>
+                <div style={{fontSize:11,color:"#444",marginBottom:6}}>Current PIN</div>
+                <input type="password" maxLength={4} value={oldPin} onChange={e=>setOldPin(e.target.value)}
+                  placeholder="••••" style={{width:"100%",padding:"10px 14px",borderRadius:8,
+                    background:"#111",border:"1px solid #222",color:"#fff",fontSize:16,
+                    letterSpacing:8,outline:"none",textAlign:"center"}}/>
+              </div>
+            )}
+            {pinStep===2 && (
+              <div>
+                <div style={{fontSize:11,color:"#444",marginBottom:6}}>New PIN</div>
+                <input type="password" maxLength={4} value={newPin} onChange={e=>setNewPin(e.target.value)}
+                  placeholder="••••" style={{width:"100%",padding:"10px 14px",borderRadius:8,
+                    background:"#111",border:"1px solid #222",color:"#fff",fontSize:16,
+                    letterSpacing:8,outline:"none",textAlign:"center"}}/>
+              </div>
+            )}
+            {pinStep===3 && (
+              <div>
+                <div style={{fontSize:11,color:"#444",marginBottom:6}}>Confirm New PIN</div>
+                <input type="password" maxLength={4} value={confirmPin} onChange={e=>setConfirmPin(e.target.value)}
+                  placeholder="••••" style={{width:"100%",padding:"10px 14px",borderRadius:8,
+                    background:"#111",border:"1px solid #222",color:"#fff",fontSize:16,
+                    letterSpacing:8,outline:"none",textAlign:"center"}}/>
+              </div>
+            )}
+            {pinMsg && <div style={{fontSize:12,color:pinMsg.includes("✅")?"#30d158":"#ff453a"}}>{pinMsg}</div>}
+            <button onClick={handlePinChange} style={{padding:"10px",borderRadius:8,
+              background:"#f5a623",border:"none",color:"#000",fontSize:13,fontWeight:700,cursor:"pointer"}}>
+              {pinStep===1?"Next →":pinStep===2?"Next →":"Confirm"}
+            </button>
+          </div>
+        )}
+      </Card>
+
+      {/* Currency */}
+      <Card style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:600,color:"#fff"}}>Display Currency</div>
+          <div style={{fontSize:12,color:"#444",marginTop:3}}>Primary currency shown across dashboard</div>
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          {["USD","AUD"].map(cur=>(
+            <button key={cur} onClick={()=>setCurrency(cur)} style={{
+              padding:"7px 16px",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",
+              background:currency===cur?"#f5a623":"#111",
+              border:`1px solid ${currency===cur?"#f5a623":"#222"}`,
+              color:currency===cur?"#000":"#555",
+            }}>{cur}</button>
+          ))}
+        </div>
+      </Card>
+
+      {/* Theme */}
+      <Card style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:600,color:"#fff"}}>Theme</div>
+          <div style={{fontSize:12,color:"#444",marginTop:3}}>Currently following your system setting</div>
+        </div>
+        <div style={{padding:"7px 18px",borderRadius:8,background:"#111",
+          border:"1px solid #222",color:"#555",fontSize:12,fontWeight:600}}>Auto 🌗</div>
+      </Card>
+
+      {/* Notifications */}
+      <Card style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div>
+          <div style={{fontSize:14,fontWeight:600,color:"#fff"}}>Toast Notifications</div>
+          <div style={{fontSize:12,color:"#444",marginTop:3}}>Alerts when coins pump 20%+</div>
+        </div>
+        <button onClick={()=>setNotificationsOn(n=>!n)} style={{
+          width:52,height:28,borderRadius:14,border:"none",cursor:"pointer",
+          background:notificationsOn?"#f5a623":"#222",
+          position:"relative",transition:"background 0.2s",
+        }}>
+          <div style={{
+            width:22,height:22,borderRadius:"50%",background:"#fff",
+            position:"absolute",top:3,
+            left:notificationsOn?27:3,
+            transition:"left 0.2s",
+          }}/>
+        </button>
+      </Card>
+
+      {/* Lock */}
       <button onClick={onLock} style={{marginTop:8,padding:"12px",borderRadius:12,
         background:"#111",border:"1px solid #222",color:"#555",fontSize:13,cursor:"pointer"}}>
         🔒 Lock Dashboard
@@ -946,6 +1053,8 @@ export default function App(){
   const[page,setPage]=useState("portfolio");
   const[toasts,setToasts]=useState([]);
   const[toastId,setToastId]=useState(0);
+  const[notificationsOn,setNotificationsOn]=useState(true);
+  const[currency,setCurrency]=useState("AUD");
 
   const addToast=useCallback(()=>{
     const coins=["BONK","WIF","POPCAT","MYRO"];
@@ -959,10 +1068,10 @@ export default function App(){
 
   // Demo toast every 15s
   useEffect(()=>{
-    if(!unlocked)return;
+    if(!unlocked||!notificationsOn)return;
     const t=setInterval(addToast,15000);
     return()=>clearInterval(t);
-  },[unlocked,addToast]);
+  },[unlocked,notificationsOn,addToast]);
 
   if(!unlocked)return <PinScreen onUnlock={()=>setUnlocked(true)}/>;
 
@@ -1057,7 +1166,7 @@ export default function App(){
           {page==="trades"   &&<Trades/>}
           {page==="wallets"  &&<Wallets/>}
           {page==="tax"      &&<Tax/>}
-          {page==="settings" &&<Settings onLock={()=>setUnlocked(false)}/>}
+          {page==="settings" &&<Settings onLock={()=>setUnlocked(false)} notificationsOn={notificationsOn} setNotificationsOn={setNotificationsOn} currency={currency} setCurrency={setCurrency}/>}
         </div>
       </div>
     </div>
