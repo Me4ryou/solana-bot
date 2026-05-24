@@ -11,6 +11,7 @@ const AUD_RATE_DEFAULT = 1.54;
 function useLiveData() {
   const [solBalance, setSolBalance] = useState(null);
   const [tokens, setTokens] = useState([]);
+  const [trades, setTrades] = useState([]);
   const [solPrice, setSolPrice] = useState(182.6);
   const [audRate, setAudRate] = useState(AUD_RATE_DEFAULT);
   const [loading, setLoading] = useState(true);
@@ -105,6 +106,42 @@ function useLiveData() {
         const fxData = await fxRes.json();
         if (fxData?.rates?.AUD) setAudRate(fxData.rates.AUD);
 
+        // Fetch transaction history for trade detection
+        try {
+          const txRes = await fetch(
+            `https://api.helius.xyz/v0/addresses/${WALLET}/transactions?api-key=${HELIUS_API_KEY}&limit=50&type=SWAP`
+          );
+          const txData = await txRes.json();
+          if (Array.isArray(txData)) {
+            const trades = txData
+              .filter(tx => tx.type === "SWAP" && tx.tokenTransfers && tx.tokenTransfers.length > 0)
+              .map(tx => {
+                const transfers = tx.tokenTransfers || [];
+                // Find what was received (bought) and what was sent (sold)
+                const received = transfers.find(t => t.toUserAccount === WALLET);
+                const sent = transfers.find(t => t.fromUserAccount === WALLET);
+                const date = new Date(tx.timestamp * 1000);
+                return {
+                  symbol: received?.symbol || received?.mint?.slice(0,6) || "?",
+                  name: received?.tokenName || received?.symbol || "Unknown",
+                  date: date.toLocaleDateString("en-AU", {day:"numeric",month:"short",year:"numeric"}),
+                  amountBought: received?.tokenAmount || 0,
+                  amountSent: sent?.tokenAmount || 0,
+                  sentSymbol: sent?.symbol || "SOL",
+                  amountInvested: sent?.tokenAmount || 0,
+                  tx: tx.signature,
+                  status: "closed",
+                  mult: "?",
+                  pnl: 0,
+                };
+              })
+              .filter(t => t.symbol !== "?");
+            setTrades(trades);
+          }
+        } catch(e) {
+          console.log("Trade fetch error:", e);
+        }
+
         setError(null);
       } catch(e) {
         setError("Could not fetch live data. Showing cached data.");
@@ -118,7 +155,7 @@ function useLiveData() {
     return () => clearInterval(interval);
   }, []);
 
-  return { solBalance, tokens, solPrice, audRate, loading, error };
+  return { solBalance, tokens, solPrice, audRate, loading, error, trades };
 }
 
 // ── DATA ──────────────────────────────────────────────────────────────────────
@@ -336,7 +373,7 @@ const WALLET_ASSETS = []; // Real data loaded from Helius
 const WALLET_PIE_COLORS=["#9945ff","#2775ca","#627eea","#00d4ff","#f5a623","#30d158","#ff6b35","#ff453a","#bf5af2","#ff9f0a"];
 
 function Portfolio(){
-  const { solBalance, tokens, solPrice, audRate, loading, error } = useLiveData();
+  const { solBalance, tokens, solPrice, audRate, loading, error, trades } = useLiveData();
   const solBal = solBalance !== null ? solBalance : 12.48;
   const solUSD = solBal * solPrice;
   const total=HOLDINGS.reduce((s,h)=>s+h.value,0);
@@ -383,7 +420,7 @@ function Portfolio(){
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"clamp(8px,1vw,16px)"}}>
         {[
           {label:"Total Wallet Value",value:loading?"Loading...":(`$${fmt(walletTotal)}`),sub:`A$${fmt(walletTotal*audRate)}`,accent:true},
-          {label:"Meme Portfolio",value:`$${fmt(total)}`,sub:`A$${fmt(total*1.54)}`},
+          {label:"Meme Portfolio",value:`$${fmt(liveWalletAssets.filter(a=>a.symbol!=="SOL"&&a.symbol!=="USDC"&&a.symbol!=="USDT").reduce((s,a)=>s+a.value,0))}`,sub:`${liveWalletAssets.filter(a=>a.symbol!=="SOL"&&a.symbol!=="USDC"&&a.symbol!=="USDT").length} tokens`},
           {label:"Total PnL",value:(totalPnl>=0?"+":"")+fmtUSD(totalPnl),sub:`${((totalPnl/total)*100).toFixed(1)}% return`,green:totalPnl>=0},
           {label:"Win Rate",value:"75%",sub:"3 of 4 winning"},
         ].map((s,i)=>(
@@ -601,10 +638,12 @@ function TradeDetail({tr, onBack}){
 
 // ── TRADES ────────────────────────────────────────────────────────────────────
 function Trades(){
+  const { trades: liveTrades, loading } = useLiveData();
+  const allTrades = liveTrades.length > 0 ? liveTrades : TRADES;
   const[filter,setFilter]=useState("all");
   const[selected,setSelected]=useState(null);
-  const filtered=filter==="all"?TRADES:TRADES.filter(t=>t.status===filter);
-  const totalPnl=TRADES.reduce((s,t)=>s+t.pnl,0);
+  const filtered=filter==="all"?allTrades:allTrades.filter(t=>t.status===filter);
+  const totalPnl=allTrades.reduce((s,t)=>s+(t.pnl||0),0);
 
   if(selected) return <TradeDetail tr={selected} onBack={()=>setSelected(null)}/>;
 
@@ -612,10 +651,10 @@ function Trades(){
     <div style={{display:"flex",flexDirection:"column",gap:20}}>
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:16}}>
         {[
-          {label:"Total Trades",value:"5"},
-          {label:"Win Rate",value:"75%"},
-          {label:"Total PnL",value:(totalPnl>=0?"+":"")+fmtUSD(totalPnl),green:totalPnl>=0},
-          {label:"Best Call",value:"+$238.5",green:true},
+          {label:"Total Trades",value:String(allTrades.length)},
+          {label:"Win Rate",value:allTrades.length>0?`${Math.round(allTrades.filter(t=>t.pnl>0).length/allTrades.length*100)}%`:"N/A"},
+          {label:"Total PnL",value:(totalPnl>=0?"+":"")+fmtUSD(Math.abs(totalPnl)),green:totalPnl>=0},
+          {label:"Best Call",value:allTrades.length>0?("+"+fmtUSD(Math.max(...allTrades.map(t=>t.pnl||0)))):"N/A",green:true},
         ].map((s,i)=>(
           <Card key={i} style={{textAlign:"center"}}>
             <div style={{fontSize:10,color:"#333",textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>{s.label}</div>
@@ -640,6 +679,8 @@ function Trades(){
             <div key={h} style={{fontSize:10,color:"#333",textTransform:"uppercase",letterSpacing:0.5}}>{h}</div>
           ))}
         </div>
+        {loading && <div style={{color:"#555",fontSize:13,padding:"20px 0"}}>🔄 Loading trades from chain...</div>}
+        {!loading && filtered.length===0 && <div style={{color:"#555",fontSize:13,padding:"20px 0"}}>No swap transactions found for this wallet yet.</div>}
         {filtered.map((tr,i)=>(
           <div key={i} onClick={()=>setSelected(tr)}
             style={{display:"grid",gridTemplateColumns:"1.5fr 1fr 1fr 1fr 1fr auto",
