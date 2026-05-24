@@ -113,7 +113,12 @@ const PORTFOLIO_DATA = [
   {t:"13 May",v:1590},{t:"15 May",v:1820},{t:"18 May",v:2100},{t:"20 May",v:1950},
   {t:"22 May",v:2340},{t:"24 May",v:2680},
 ];
-const HOLDINGS = []; // Will be populated from real trade data
+const HOLDINGS = [
+  {symbol:"BONK",  value:37.44, pnl:115.2, pct:115.2},
+  {symbol:"WIF",   value:101.22,pnl:24.78, pct:32.4},
+  {symbol:"POPCAT",value:160.2, pnl:48.6,  pct:43.5},
+  {symbol:"MYRO",  value:60.8,  pnl:-38.4, pct:-37.5},
+];
 const TRADES = [
   {
     symbol:"BOME", name:"Book of Meme", date:"May 17, 2026", exitDate:"May 18, 2026",
@@ -319,8 +324,8 @@ function Portfolio(){
   const { solBalance, tokens, solPrice, audRate, loading, error } = useLiveData();
   const solBal = solBalance !== null ? solBalance : 12.48;
   const solUSD = solBal * solPrice;
-  const total = liveWalletAssets.reduce((s,a)=>s+a.value,0);
-  const totalPnl = 0;
+  const total=HOLDINGS.reduce((s,h)=>s+h.value,0);
+  const totalPnl=HOLDINGS.reduce((s,h)=>s+h.pnl,0);
 
   // Build wallet assets with live data
   const liveTokenAssets = tokens.map((t, i) => ({
@@ -945,7 +950,7 @@ export default function App(){
 
   if(!unlocked)return <PinScreen onUnlock={()=>setUnlocked(true)}/>;
 
-  try { return(
+  return(
     <div style={{display:"flex",minHeight:"100vh",background:"#000",
       fontFamily:"-apple-system,'SF Pro Display',sans-serif",color:"#fff",
       fontSize:"clamp(12px, 1vw, 14px)",overflowX:"hidden"}}>
@@ -1040,5 +1045,5 @@ export default function App(){
         </div>
       </div>
     </div>
-  ); } catch(e) { return <div style={{color:"#fff",padding:40,background:"#000",minHeight:"100vh"}}><h2>Error: {e.message}</h2><pre style={{marginTop:20,color:"#888",fontSize:12}}>{e.stack}</pre></div>; }
+  );
 }
