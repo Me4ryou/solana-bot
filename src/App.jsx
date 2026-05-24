@@ -370,7 +370,7 @@ function Portfolio(){
       {/* Top stats - compact */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"clamp(8px,1vw,16px)"}}>
         {[
-          {label:"Total Wallet Value",value:`$${fmt(walletTotal)}`,sub:`A$${fmt(walletTotal*1.54)}`,accent:true},
+          {label:"Total Wallet Value",value:loading?"Loading...":(`$${fmt(walletTotal)}`),sub:`A$${fmt(walletTotal*audRate)}`,accent:true},
           {label:"Meme Portfolio",value:`$${fmt(total)}`,sub:`A$${fmt(total*1.54)}`},
           {label:"Total PnL",value:(totalPnl>=0?"+":"")+fmtUSD(totalPnl),sub:`${((totalPnl/total)*100).toFixed(1)}% return`,green:totalPnl>=0},
           {label:"Win Rate",value:"75%",sub:"3 of 4 winning"},
