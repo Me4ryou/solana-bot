@@ -113,12 +113,7 @@ const PORTFOLIO_DATA = [
   {t:"13 May",v:1590},{t:"15 May",v:1820},{t:"18 May",v:2100},{t:"20 May",v:1950},
   {t:"22 May",v:2340},{t:"24 May",v:2680},
 ];
-const HOLDINGS = [
-  {symbol:"BONK",  value:37.44, pnl:115.2, pct:115.2},
-  {symbol:"WIF",   value:101.22,pnl:24.78, pct:32.4},
-  {symbol:"POPCAT",value:160.2, pnl:48.6,  pct:43.5},
-  {symbol:"MYRO",  value:60.8,  pnl:-38.4, pct:-37.5},
-];
+const HOLDINGS = []; // Will be populated from real trade data
 const TRADES = [
   {
     symbol:"BOME", name:"Book of Meme", date:"May 17, 2026", exitDate:"May 18, 2026",
@@ -317,35 +312,24 @@ const SectionTitle=({children})=>(
 );
 
 // ── PORTFOLIO ─────────────────────────────────────────────────────────────────
-const WALLET_ASSETS = [
-  {symbol:"SOL",  name:"Solana",   value:2276.9,  amount:12.48,  color:"#9945ff"},
-  {symbol:"ETH",  name:"Ethereum", value:382.1,   amount:0.1,    color:"#627eea"},
-  {symbol:"HYPE", name:"Hyperliquid",value:184.2, amount:8.2,    color:"#00d4ff"},
-  {symbol:"USDC", name:"USD Coin", value:150.0,   amount:150.0,  color:"#2775ca"},
-  {symbol:"BONK", name:"Bonk",     value:37.44,   amount:1200000,color:"#f5a623"},
-  {symbol:"WIF",  name:"dogwifhat",value:101.22,  amount:42,     color:"#30d158"},
-  {symbol:"POPCAT",name:"Popcat",  value:160.2,   amount:180,    color:"#ff6b35"},
-  {symbol:"MYRO", name:"Myro",     value:60.8,    amount:3200,   color:"#ff453a"},
-];
-const WALLET_PIE_COLORS=WALLET_ASSETS.map(a=>a.color);
+const WALLET_ASSETS = []; // Real data loaded from Helius
+const WALLET_PIE_COLORS=["#9945ff","#2775ca","#627eea","#00d4ff","#f5a623","#30d158","#ff6b35","#ff453a","#bf5af2","#ff9f0a"];
 
 function Portfolio(){
   const { solBalance, tokens, solPrice, audRate, loading, error } = useLiveData();
   const solBal = solBalance !== null ? solBalance : 12.48;
   const solUSD = solBal * solPrice;
-  const total=HOLDINGS.reduce((s,h)=>s+h.value,0);
-  const totalPnl=HOLDINGS.reduce((s,h)=>s+h.pnl,0);
+  const total = walletTotal;
+  const totalPnl = 0; // Will come from real trade history
 
   // Build wallet assets with live data
-  const liveTokenAssets = tokens.length > 0
-    ? tokens.map((t, i) => ({
-        symbol: t.symbol,
-        name: t.name,
-        value: t.value,
-        amount: t.amount,
-        color: PIE_COLORS[i % PIE_COLORS.length],
-      }))
-    : WALLET_ASSETS.slice(1);
+  const liveTokenAssets = tokens.map((t, i) => ({
+    symbol: t.symbol,
+    name: t.name,
+    value: t.value,
+    amount: t.amount,
+    color: WALLET_PIE_COLORS[(i+1) % WALLET_PIE_COLORS.length],
+  }));
 
   const liveWalletAssets = [
     {symbol:"SOL", name:"Solana", value: solUSD, amount: solBal, color:"#9945ff"},
@@ -471,31 +455,7 @@ function Portfolio(){
         </div>
       </Card>
 
-      {/* Meme Holdings PnL */}
-      <Card>
-        <SectionTitle>Meme Holdings — PnL</SectionTitle>
-        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",gap:12,
-          borderBottom:"1px solid #1a1a1a",paddingBottom:8,marginBottom:8}}>
-          {["Token","Value","PnL $","PnL %"].map(h=>(
-            <div key={h} style={{fontSize:10,color:"#333",textTransform:"uppercase",letterSpacing:0.5}}>{h}</div>
-          ))}
-        </div>
-        {HOLDINGS.map((h,i)=>(
-          <div key={i} style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr",
-            gap:12,padding:"10px 0",borderBottom:"1px solid #111",alignItems:"center"}}>
-            <div style={{display:"flex",alignItems:"center",gap:10}}>
-              <div style={{width:30,height:30,borderRadius:8,background:`${PIE_COLORS[i]}22`,
-                display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:PIE_COLORS[i],fontWeight:700}}>
-                {h.symbol[0]}
-              </div>
-              <div style={{fontSize:13,fontWeight:600,color:"#fff"}}>{h.symbol}</div>
-            </div>
-            <div style={{fontSize:13,color:"#ccc"}}>${fmt(h.value)}</div>
-            <div style={{fontSize:13,fontWeight:600,color:pnlCol(h.pnl)}}>{h.pnl>=0?"+":""}{fmtUSD(Math.abs(h.pnl))}</div>
-            <div style={{fontSize:13,fontWeight:600,color:pnlCol(h.pct)}}>{h.pct>=0?"+":""}{fmt(h.pct,1)}%</div>
-          </div>
-        ))}
-      </Card>
+
     </div>
   );
 }
