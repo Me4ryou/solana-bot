@@ -1,6 +1,6 @@
 """
 Solana Alpha Telegram Bot — Final Version
-New: Auto delete CA, Pin Top 10, Weekly leaderboard, Streak tracker, /groupstats
+Fixed: Only alert on new highs, ignore drops, track peak multiplier
 """
 
 import os
@@ -48,6 +48,7 @@ async def init_db():
             entry_mc REAL,
             current_mc REAL,
             milestones TEXT,
+            peak_multiplier REAL DEFAULT 1.0,
             created_at TEXT,
             last_volume_at TEXT,
             active INTEGER,
@@ -99,6 +100,13 @@ def build_links(ca: str) -> str:
     terminal = f"https://terminal.padre.trade/terminal/{ca}"
     gmgn = f"https://gmgn.ai/sol/token/{ca}"
     return f'🔗 <a href="{axiom}">Axiom</a> | <a href="{terminal}">Terminal</a> | <a href="{gmgn}">GMGN</a>'
+
+def next_milestone(current_mult: float, milestones_hit: list) -> int | None:
+    """Returns the next milestone above current multiplier that hasn't been hit."""
+    for m in MILESTONES:
+        if m not in milestones_hit and current_mult >= m:
+            return m
+    return None
 
 # ── API FETCHERS ──────────────────────────────────────────────────────────────
 
@@ -277,12 +285,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await thinking.delete()
 
-    # Streak check
     streak = await get_streak(caller)
-    streak_msg = ""
-    if streak >= 2:
-        streak_msg = f"\n🔥 <b>{caller} is on a {streak} win streak!</b>"
-
+    streak_msg = f"\n🔥 <b>{caller} is on a {streak} win streak!</b>" if streak >= 2 else ""
     full_text = text + streak_msg
 
     try:
@@ -315,10 +319,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await db.execute("""
         INSERT OR IGNORE INTO calls
         (ca, chat_id, name, symbol, caller, entry_price, current_price, last_checked_price,
-         entry_mc, current_mc, milestones, created_at, last_volume_at, active, win)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         entry_mc, current_mc, milestones, peak_multiplier, created_at, last_volume_at, active, win)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (ca, msg.chat_id, token.get("name"), token.get("symbol"),
-              caller, price, price, price, mc, mc, json.dumps([]), now, now, 1, 0))
+              caller, price, price, price, mc, mc, json.dumps([]), 1.0, now, now, 1, 0))
         await db.commit()
 
 
@@ -333,8 +337,8 @@ async def handle_mystats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with aiosqlite.connect(DB_FILE) as db:
         cursor = await db.execute("""
-        SELECT name, symbol, entry_mc, current_mc, entry_price, current_price, active
-        FROM calls WHERE caller=? ORDER BY (current_price/entry_price) DESC
+        SELECT name, symbol, entry_mc, current_mc, entry_price, current_price, active, peak_multiplier
+        FROM calls WHERE caller=? ORDER BY peak_multiplier DESC
         """, (caller,))
         rows = await cursor.fetchall()
 
@@ -344,8 +348,7 @@ async def handle_mystats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     total = len(rows)
     winning = sum(1 for r in rows if r[5] > r[4])
-    best = max(rows, key=lambda r: r[5]/r[4] if r[4] else 1)
-    best_mult = best[5] / best[4] if best[4] else 1
+    best = rows[0]
     streak = await get_streak(caller)
 
     lines = [
@@ -354,15 +357,15 @@ async def handle_mystats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Winning: <b>{winning}</b>",
         f"❌ Losing: <b>{total - winning}</b>",
         f"🔥 Current Streak: <b>{streak}</b>",
-        f"🏆 Best Call: <b>${best[1]}</b> — <b>{fmt_x(best_mult)}</b>",
-        f"   Entry: {fmt_usd(best[2])} → Now: {fmt_usd(best[3])}\n",
+        f"🏆 Best Call: <b>${best[1]}</b> — peaked at <b>{fmt_x(best[7])}</b>",
+        f"   Entry: {fmt_usd(best[2])} → Peak: {fmt_usd(best[3])}\n",
         "<b>Recent Calls:</b>"
     ]
 
     for r in rows[:5]:
         mult = r[5] / r[4] if r[4] else 1
         status = "🟢" if r[5] > r[4] else "🔴"
-        lines.append(f"{status} <b>${r[1]}</b> — {fmt_x(mult)} {'(active)' if r[6] else '(dead)'}")
+        lines.append(f"{status} <b>${r[1]}</b> — {fmt_x(mult)} | peak {fmt_x(r[7])} {'(active)' if r[6] else '(dead)'}")
 
     await msg.reply_text("\n".join(lines), parse_mode="HTML")
 
@@ -385,15 +388,13 @@ async def handle_groupstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         top_caller_row = await cursor.fetchone()
 
         cursor = await db.execute("""
-        SELECT symbol, caller, entry_price, current_price FROM calls
-        ORDER BY (current_price/entry_price) DESC LIMIT 1
+        SELECT symbol, caller, peak_multiplier FROM calls
+        ORDER BY peak_multiplier DESC LIMIT 1
         """)
         best_call = await cursor.fetchone()
 
     top_caller = top_caller_row[0] if top_caller_row else "N/A"
     win_rate = int((winning / total) * 100) if total else 0
-
-    best_mult = best_call[3] / best_call[2] if best_call and best_call[2] else 0
 
     lines = [
         "📊 <b>Group Stats</b>\n",
@@ -401,8 +402,10 @@ async def handle_groupstats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Winning Calls: <b>{winning}</b>",
         f"📈 Win Rate: <b>{win_rate}%</b>",
         f"👑 Top Caller: <b>{top_caller}</b>",
-        f"🏆 Best Call Ever: <b>${best_call[1] if best_call else 'N/A'}</b> — <b>{fmt_x(best_mult)}</b> by {best_call[2] if best_call else 'N/A'}" if best_call else "",
     ]
+
+    if best_call:
+        lines.append(f"🏆 Best Call Ever: <b>${best_call[0]}</b> — peaked at <b>{fmt_x(best_call[2])}</b> by {best_call[1]}")
 
     await msg.reply_text("\n".join(lines), parse_mode="HTML")
 
@@ -423,8 +426,9 @@ async def monitor_prices(app):
             entry_price, last_checked_price = row[5], row[7]
             entry_mc = row[8]
             milestones = json.loads(row[10])
-            created_at = datetime.fromisoformat(row[11])
-            last_volume_at = datetime.fromisoformat(row[12])
+            peak_multiplier = float(row[11])
+            created_at = datetime.fromisoformat(row[12])
+            last_volume_at = datetime.fromisoformat(row[13])
 
             token = await fetch_token(ca)
             if not token:
@@ -444,21 +448,26 @@ async def monitor_prices(app):
                     async with aiosqlite.connect(DB_FILE) as db:
                         await db.execute("UPDATE calls SET active=0 WHERE ca=?", (ca,))
                         await db.commit()
-                    dead_msg = (
-                        f"💀 <b>${symbol} is dead</b>\n\n"
-                        f"📋 <code>{ca}</code>\n"
-                        f"🏅 Called by {caller} @ <b>{fmt_usd(entry_mc)}</b> MC\n"
-                        f"📉 Final: <b>{fmt_usd(current_mc)}</b> MC"
-                    )
-                    try:
-                        await app.bot.send_message(chat_id=chat_id, text=dead_msg, parse_mode="HTML")
-                    except Exception:
-                        pass
+                    # Only announce dead if it never hit a milestone
+                    if not milestones:
+                        dead_msg = (
+                            f"💀 <b>${symbol} is dead</b>\n\n"
+                            f"📋 <code>{ca}</code>\n"
+                            f"🏅 Called by {caller} @ <b>{fmt_usd(entry_mc)}</b> MC\n"
+                            f"📉 Never hit a milestone."
+                        )
+                        try:
+                            await app.bot.send_message(chat_id=chat_id, text=dead_msg, parse_mode="HTML")
+                        except Exception:
+                            pass
                     continue
 
             multiplier = current_price / entry_price if entry_price else 1
 
-            # 5 min growth alert
+            # Update peak multiplier
+            new_peak = max(peak_multiplier, multiplier)
+
+            # 5 min growth alert — only if growing from last check
             if last_checked_price and last_checked_price > 0:
                 growth = (current_price - last_checked_price) / last_checked_price
                 if growth >= GROWTH_ALERT_THRESHOLD:
@@ -492,11 +501,10 @@ async def monitor_prices(app):
                 except Exception:
                     pass
 
-            # Milestones
+            # Milestones — ONLY alert on new highs above previous peak
             for m in MILESTONES:
-                if multiplier >= m and m not in milestones:
+                if m not in milestones and multiplier >= m and multiplier >= peak_multiplier:
                     milestones.append(m)
-                    # Mark as win
                     async with aiosqlite.connect(DB_FILE) as db:
                         await db.execute("UPDATE calls SET win=1 WHERE ca=?", (ca,))
                         await db.commit()
@@ -515,9 +523,9 @@ async def monitor_prices(app):
             async with aiosqlite.connect(DB_FILE) as db:
                 await db.execute("""
                 UPDATE calls SET current_price=?, last_checked_price=?, current_mc=?,
-                last_volume_at=?, milestones=? WHERE ca=?
+                last_volume_at=?, milestones=?, peak_multiplier=? WHERE ca=?
                 """, (current_price, current_price, current_mc,
-                      last_volume_at.isoformat(), json.dumps(milestones), ca))
+                      last_volume_at.isoformat(), json.dumps(milestones), new_peak, ca))
                 await db.commit()
 
 # ── MORNING SUMMARY ───────────────────────────────────────────────────────────
@@ -532,8 +540,9 @@ async def morning_summary(app):
 
         async with aiosqlite.connect(DB_FILE) as db:
             cursor = await db.execute("""
-            SELECT ca, chat_id, name, symbol, caller, entry_price, current_price, entry_mc, current_mc
-            FROM calls WHERE active=1 ORDER BY (current_price/entry_price) DESC
+            SELECT ca, chat_id, name, symbol, caller, entry_price, current_price,
+                   entry_mc, current_mc, peak_multiplier, active
+            FROM calls ORDER BY peak_multiplier DESC
             """)
             rows = await cursor.fetchall()
 
@@ -542,16 +551,27 @@ async def morning_summary(app):
 
         now = datetime.now(SYDNEY_TZ)
         chat_id = rows[0][1]
+        active_rows = [r for r in rows if r[10] == 1]
+        dead_rows = [r for r in rows if r[10] == 0]
+
         lines = [
             "🌅 <b>Morning Summary</b>",
             f"📅 {now.strftime('%d %b %Y, %I:%M %p')} AEST\n",
-            f"📊 <b>{len(rows)} active coins being tracked</b>\n"
+            f"📊 <b>{len(active_rows)} active | {len(dead_rows)} dead</b>\n"
         ]
-        for row in rows:
-            _, _, name, symbol, caller, entry_price, current_price, entry_mc, current_mc = row
-            mult = current_price / entry_price if entry_price else 1
-            emoji = "🟢" if mult >= 1 else "🔴"
-            lines.append(f"{emoji} <b>${symbol}</b> — <b>{fmt_x(mult)}</b>\n   👤 {caller} @ {fmt_usd(entry_mc)} → {fmt_usd(current_mc)}")
+
+        if active_rows:
+            lines.append("🟢 <b>Active Coins:</b>")
+            for row in active_rows:
+                _, _, name, symbol, caller, entry_price, current_price, entry_mc, current_mc, peak_mult, _ = row
+                mult = current_price / entry_price if entry_price else 1
+                lines.append(f"  <b>${symbol}</b> — {fmt_x(mult)} | peak {fmt_x(peak_mult)} | 👤 {caller}")
+
+        if dead_rows:
+            lines.append("\n💀 <b>Dead Coins:</b>")
+            for row in dead_rows:
+                _, _, name, symbol, caller, entry_price, current_price, entry_mc, current_mc, peak_mult, _ = row
+                lines.append(f"  <b>${symbol}</b> — peaked at {fmt_x(peak_mult)} | 👤 {caller}")
 
         try:
             await app.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
@@ -573,9 +593,10 @@ async def daily_top10(app):
 
         async with aiosqlite.connect(DB_FILE) as db:
             cursor = await db.execute("""
-            SELECT ca, chat_id, name, symbol, caller, entry_price, current_price, entry_mc, current_mc
-            FROM calls WHERE active=1 AND created_at >= ? AND current_price > entry_price
-            ORDER BY (current_price/entry_price) DESC LIMIT 10
+            SELECT ca, chat_id, name, symbol, caller, entry_price, current_price,
+                   entry_mc, current_mc, peak_multiplier, active
+            FROM calls WHERE created_at >= ?
+            ORDER BY peak_multiplier DESC LIMIT 10
             """, (cutoff,))
             rows = await cursor.fetchall()
 
@@ -588,18 +609,18 @@ async def daily_top10(app):
             "🏆 <b>Top 10 Calls — Last 24hrs</b>",
             f"📅 {now.strftime('%d %b %Y, %I:%M %p')} AEST\n"
         ]
+
         for i, row in enumerate(rows):
-            ca, _, name, symbol, caller, entry_price, current_price, entry_mc, current_mc = row
-            mult = current_price / entry_price if entry_price else 1
+            ca, _, name, symbol, caller, entry_price, current_price, entry_mc, current_mc, peak_mult, active = row
+            status = "💀" if not active else "🟢"
             lines.append(
-                f"{medals[i]} <b>${symbol}</b> — <b>{fmt_x(mult)}</b>\n"
-                f"   👤 {caller} @ {fmt_usd(entry_mc)} → {fmt_usd(current_mc)}\n"
+                f"{medals[i]} {status} <b>${symbol}</b> — peaked <b>{fmt_x(peak_mult)}</b>\n"
+                f"   👤 {caller} @ {fmt_usd(entry_mc)}\n"
                 f"   <code>{ca[:20]}...</code>"
             )
 
         try:
             sent = await app.bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode="HTML")
-            # Pin the top 10 message
             await app.bot.pin_chat_message(chat_id=chat_id, message_id=sent.message_id,
                                             disable_notification=True)
         except Exception:
@@ -610,7 +631,6 @@ async def daily_top10(app):
 async def weekly_leaderboard(app):
     while True:
         now = datetime.now(SYDNEY_TZ)
-        # Next Monday 12PM
         days_until_monday = (7 - now.weekday()) % 7 or 7
         target = (now + timedelta(days=days_until_monday)).replace(
             hour=12, minute=0, second=0, microsecond=0)
@@ -623,7 +643,7 @@ async def weekly_leaderboard(app):
             cursor = await db.execute("""
             SELECT caller, COUNT(*) as total,
                    SUM(CASE WHEN current_price > entry_price THEN 1 ELSE 0 END) as wins,
-                   MAX(current_price/entry_price) as best_mult,
+                   MAX(peak_multiplier) as best_mult,
                    chat_id
             FROM calls WHERE created_at >= ?
             GROUP BY caller ORDER BY wins DESC, best_mult DESC LIMIT 10
