@@ -148,46 +148,85 @@ function LiveDataProvider({ children }) {
               } catch {}
             }));
 
-            trades = txData
+            const rawTrades = txData
               .filter(tx => tx.tokenTransfers && tx.tokenTransfers.length >= 2)
               .map(tx => {
                 const transfers = tx.tokenTransfers || [];
-                const received = transfers.find(t => t.toUserAccount === WALLET && t.mint !== "So11111111111111111111111111111111111111112");
-                const sent = transfers.find(t => t.fromUserAccount === WALLET);
+                // Find token received (what we bought) - not SOL, not stablecoins we sent
+                const received = transfers.find(t =>
+                  t.toUserAccount === WALLET &&
+                  t.mint !== "So11111111111111111111111111111111111111112"
+                );
+                // Find what we sent (SOL native or token)
+                const nativeSent = (tx.nativeTransfers||[]).find(t => t.fromUserAccount === WALLET);
+                const tokenSent = transfers.find(t => t.fromUserAccount === WALLET);
                 if (!received) return null;
-                const date = new Date(tx.timestamp * 1000);
                 const meta = mintMeta[received.mint] || {};
-                const amountInvested = parseFloat(sent?.tokenAmount || 0);
-                const sentSym = sent?.symbol || "SOL";
-                const investedUSD = sentSym === "SOL" ? amountInvested * solPrice : amountInvested;
+                // Skip stablecoins as received (USDC swaps between pools)
+                if(["USDC","USDT"].includes(meta.symbol)) return null;
+                const date = new Date(tx.timestamp * 1000);
+                // Calculate invested amount in USD
+                let amountInvested = 0;
+                let sentSym = "SOL";
+                if(nativeSent && nativeSent.amount > 0) {
+                  amountInvested = (nativeSent.amount / 1e9) * solPrice;
+                  sentSym = "SOL";
+                } else if(tokenSent) {
+                  const sentMeta = mintMeta[tokenSent.mint] || {};
+                  amountInvested = parseFloat(tokenSent.tokenAmount||0) * (sentMeta.price||1);
+                  sentSym = sentMeta.symbol || tokenSent.symbol || "token";
+                }
+                // Cap invested at reasonable amount to avoid bad data
+                if(amountInvested > 100000) amountInvested = 0;
                 const amountBought = parseFloat(received.tokenAmount || 0);
-                const entryPrice = amountBought > 0 ? investedUSD / amountBought : 0;
                 const currentPrice = meta.price || 0;
-                const currentValue = amountBought * currentPrice;
-                const pnl = currentValue - investedUSD;
-                const pct = investedUSD > 0 ? ((pnl/investedUSD)*100).toFixed(1) : "0";
-                const mult = investedUSD > 0 ? (currentValue/investedUSD).toFixed(2)+"x" : "?";
+                const currentValue = currentPrice > 0 ? amountBought * currentPrice : 0;
+                const pnl = currentValue > 0 ? currentValue - amountInvested : -amountInvested;
+                const pct = amountInvested > 0 ? ((pnl/amountInvested)*100).toFixed(1) : "0";
+                const mult = amountInvested > 0 && currentValue > 0 ? (currentValue/amountInvested).toFixed(2)+"x" : "?";
                 return {
                   symbol: meta.symbol || received.symbol || received.mint?.slice(0,6) || "?",
                   name:   meta.name   || received.tokenName || received.symbol || "Unknown Token",
+                  mint:   received.mint,
                   date: date.toLocaleDateString("en-AU",{day:"numeric",month:"short",year:"numeric"}),
                   time: date.toLocaleTimeString("en-AU",{hour:"2-digit",minute:"2-digit"}),
                   amountBought,
-                  amountInvested: investedUSD,
+                  amountInvested,
                   amountReturned: currentValue,
                   sentSymbol: sentSym,
                   tx: tx.signature,
-                  status: "closed",
+                  status: currentPrice > 0 ? "open" : "closed",
                   mult,
                   pnl,
                   pct,
-                  entryPrice,
+                  entryPrice: amountBought > 0 ? amountInvested/amountBought : 0,
                   currentPrice,
                   entryMC: meta.mc || 0,
                   currentMC: meta.mc || 0,
                 };
               })
               .filter(Boolean);
+
+            // Consolidate trades by symbol
+            const consolidated = {};
+            rawTrades.forEach(t => {
+              const key = t.symbol;
+              if(!consolidated[key]){
+                consolidated[key] = {...t, txList:[t.tx]};
+              } else {
+                consolidated[key].amountBought += t.amountBought;
+                consolidated[key].amountInvested += t.amountInvested;
+                consolidated[key].amountReturned += t.amountReturned;
+                consolidated[key].txList.push(t.tx);
+                // Recalculate
+                const inv = consolidated[key].amountInvested;
+                const cur = consolidated[key].amountReturned;
+                consolidated[key].pnl = cur > 0 ? cur - inv : -inv;
+                consolidated[key].pct = inv > 0 ? ((consolidated[key].pnl/inv)*100).toFixed(1) : "0";
+                consolidated[key].mult = inv > 0 && cur > 0 ? (cur/inv).toFixed(2)+"x" : "?";
+              }
+            });
+            trades = Object.values(consolidated).sort((a,b)=>a.symbol.localeCompare(b.symbol));
           }
         } catch(e) { console.log("Trade fetch error:", e); }
 
