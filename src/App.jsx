@@ -3,7 +3,7 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, 
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const HELIUS_API_KEY = "fbd1944f-48a7-4424-9986-18e327e6a25a";
-const WALLET = "64jnH8NDz1wtpPyN8cwXCKJE8gWojf1CZ7Wn9gb5QeR9";
+const WALLET = "DjavxeTn2HTea62J6qNhn43SRfz4YUaCYJc9tR9Vy7Ae";
 const HELIUS_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
 const AUD_RATE_DEFAULT = 1.54;
 
