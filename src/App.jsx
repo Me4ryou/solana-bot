@@ -570,111 +570,90 @@ function Portfolio(){
 
 // ── TRADE DETAIL ─────────────────────────────────────────────────────────────
 function TradeDetail({tr, onBack}){
-  const isWin = tr.pnl >= 0;
+  if(!tr) return null;
+  const pnl = tr.pnl || 0;
+  const isWin = pnl >= 0;
   const StatBox = ({label, value, color, sub}) => (
     <div style={{background:"#111",border:"1px solid #1a1a1a",borderRadius:12,padding:"14px 16px"}}>
       <div style={{fontSize:10,color:"#333",textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>{label}</div>
-      <div style={{fontSize:18,fontWeight:700,color:color||"#fff"}}>{value}</div>
+      <div style={{fontSize:18,fontWeight:700,color:color||"#fff"}}>{value||"N/A"}</div>
       {sub && <div style={{fontSize:11,color:"#444",marginTop:3}}>{sub}</div>}
     </div>
   );
   return(
     <div style={{display:"flex",flexDirection:"column",gap:20}}>
       {/* Back + Header */}
-      <div style={{display:"flex",alignItems:"center",gap:16}}>
+      <div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
         <button onClick={onBack} style={{padding:"7px 16px",borderRadius:20,
           background:"#111",border:"1px solid #222",color:"#666",fontSize:13,cursor:"pointer"}}>← Back</button>
         <div>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <div style={{fontSize:22,fontWeight:700,color:"#fff"}}>{tr.symbol}</div>
-            <div style={{fontSize:13,color:"#555"}}>{tr.name}</div>
+          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+            <div style={{fontSize:22,fontWeight:700,color:"#fff"}}>{tr.symbol||"?"}</div>
+            <div style={{fontSize:13,color:"#555"}}>{tr.name||"Unknown Token"}</div>
             <span style={{padding:"3px 12px",borderRadius:20,fontSize:11,fontWeight:600,
               background:tr.status==="open"?"#30d15822":"#f5a62318",
-              color:tr.status==="open"?"#30d158":"#f5a623"}}>{tr.status}</span>
+              color:tr.status==="open"?"#30d158":"#f5a623"}}>{tr.status||"closed"}</span>
           </div>
-          <div style={{fontSize:12,color:"#444",marginTop:3}}>
-            {tr.date}{tr.exitDate?` → ${tr.exitDate}`:""} · {tr.duration}
-          </div>
+          <div style={{fontSize:12,color:"#444",marginTop:3}}>{tr.date||"Unknown date"}</div>
         </div>
         <div style={{flex:1}}/>
-        <a href={`https://solscan.io/tx/${tr.tx}`} target="_blank" rel="noopener noreferrer"
-          style={{display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:10,
-            background:"#f5a62318",border:"1px solid #f5a62333",
-            color:"#f5a623",fontSize:12,fontWeight:600,textDecoration:"none",transition:"all 0.15s"}}
-          onMouseEnter={e=>{e.currentTarget.style.background="#f5a62333";}}
-          onMouseLeave={e=>{e.currentTarget.style.background="#f5a62318";}}>
-          ↗ View on Solscan
-        </a>
-      </div>
-
-      {/* PnL Hero */}
-      <div style={{background:isWin?"linear-gradient(135deg,#30d15818,#30d15805)":"linear-gradient(135deg,#ff453a18,#ff453a05)",
-        border:`1px solid ${isWin?"#30d15833":"#ff453a33"}`,borderRadius:14,padding:"20px 24px",
-        display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div>
-          <div style={{fontSize:11,color:"#444",textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Total PnL</div>
-          <div style={{fontSize:36,fontWeight:700,color:pnlCol(tr.pnl),letterSpacing:-1}}>
-            {tr.pnl>=0?"+":""}{fmtUSD(Math.abs(tr.pnl))}
-          </div>
-          <div style={{fontSize:14,color:pnlCol(tr.pnl),marginTop:4}}>{tr.roi} · {tr.mult}</div>
-        </div>
-        <div style={{textAlign:"right"}}>
-          <div style={{fontSize:11,color:"#444",textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Invested → Returned</div>
-          <div style={{fontSize:20,fontWeight:700,color:"#fff"}}>{fmtUSD(tr.amountInvested)}</div>
-          <div style={{fontSize:16,color:pnlCol(tr.pnl),marginTop:2}}>→ {fmtUSD(tr.amountReturned)}</div>
-        </div>
-      </div>
-
-      {/* Stats Grid */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
-        <StatBox label="Entry Price"  value={`$${tr.entryPrice}`} sub={`MC: ${tr.entryMC}`}/>
-        <StatBox label="Exit Price"   value={tr.exitPrice?`$${tr.exitPrice}`:"Still Open"} color={tr.exitPrice?"#fff":"#f5a623"} sub={`MC: ${tr.exitMC}`}/>
-        <StatBox label="Tokens Bought" value={tr.tokensBought.toLocaleString()} sub={tr.symbol}/>
-        <StatBox label="Duration"     value={tr.duration}/>
-      </div>
-
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
-        <StatBox label="Amount Invested" value={fmtUSD(tr.amountInvested)} sub={`A$${fmt(tr.amountInvested*1.54)}`}/>
-        <StatBox label="Amount Returned" value={fmtUSD(tr.amountReturned)} color={pnlCol(tr.pnl)} sub={`A$${fmt(tr.amountReturned*1.54)}`}/>
-        <StatBox label="24h Volume"      value={tr.vol24h}/>
-      </div>
-
-      {/* MC Journey */}
-      <Card>
-        <SectionTitle>Market Cap Journey</SectionTitle>
-        <div style={{display:"flex",alignItems:"center",gap:16}}>
-          <div style={{background:"#111",borderRadius:10,padding:"12px 20px",textAlign:"center"}}>
-            <div style={{fontSize:10,color:"#333",marginBottom:4}}>ENTRY MC</div>
-            <div style={{fontSize:18,fontWeight:700,color:"#fff"}}>{tr.entryMC}</div>
-            <div style={{fontSize:10,color:"#555",marginTop:2}}>{tr.date}</div>
-          </div>
-          <div style={{flex:1,height:2,background:"linear-gradient(90deg,#333,#f5a623)",borderRadius:1}}/>
-          <div style={{fontSize:20,color:pnlCol(tr.pnl)}}>{tr.mult}</div>
-          <div style={{flex:1,height:2,background:"linear-gradient(90deg,#f5a623,#333)",borderRadius:1}}/>
-          <div style={{background:"#111",borderRadius:10,padding:"12px 20px",textAlign:"center"}}>
-            <div style={{fontSize:10,color:"#333",marginBottom:4}}>{tr.status==="open"?"CURRENT MC":"EXIT MC"}</div>
-            <div style={{fontSize:18,fontWeight:700,color:pnlCol(tr.pnl)}}>{tr.exitMC}</div>
-            <div style={{fontSize:10,color:"#555",marginTop:2}}>{tr.exitDate||"Now"}</div>
-          </div>
-        </div>
-      </Card>
-
-      {/* Tx hash */}
-      <Card>
-        <SectionTitle>On-Chain Record</SectionTitle>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-          <div>
-            <div style={{fontSize:11,color:"#444",marginBottom:4}}>Transaction Hash</div>
-            <div style={{fontSize:12,fontFamily:"monospace",color:"#666",wordBreak:"break-all"}}>{tr.tx}</div>
-          </div>
+        {tr.tx && (
           <a href={`https://solscan.io/tx/${tr.tx}`} target="_blank" rel="noopener noreferrer"
-            style={{marginLeft:16,padding:"8px 18px",borderRadius:10,flexShrink:0,
+            style={{display:"flex",alignItems:"center",gap:6,padding:"8px 16px",borderRadius:10,
               background:"#f5a62318",border:"1px solid #f5a62333",
               color:"#f5a623",fontSize:12,fontWeight:600,textDecoration:"none"}}>
-            ↗ Solscan
+            ↗ View on Solscan
           </a>
+        )}
+      </div>
+
+      {/* Investment Summary */}
+      <div style={{background:"linear-gradient(135deg,#f5a62318,#f5a62305)",
+        border:"1px solid #f5a62333",borderRadius:14,padding:"20px 24px"}}>
+        <div style={{fontSize:11,color:"#444",textTransform:"uppercase",letterSpacing:0.5,marginBottom:12}}>Trade Summary</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16}}>
+          <div>
+            <div style={{fontSize:11,color:"#555",marginBottom:4}}>Token Bought</div>
+            <div style={{fontSize:20,fontWeight:700,color:"#fff"}}>{tr.symbol||"?"}</div>
+            <div style={{fontSize:12,color:"#888",marginTop:2}}>{tr.amountBought?Number(tr.amountBought).toLocaleString():"N/A"} tokens</div>
+          </div>
+          <div>
+            <div style={{fontSize:11,color:"#555",marginBottom:4}}>Amount Paid</div>
+            <div style={{fontSize:20,fontWeight:700,color:"#f5a623"}}>{fmt(tr.amountInvested||0,4)} {tr.sentSymbol||"SOL"}</div>
+            <div style={{fontSize:12,color:"#888",marginTop:2}}>≈ ${fmt((tr.amountInvested||0)*182)}</div>
+          </div>
+          <div>
+            <div style={{fontSize:11,color:"#555",marginBottom:4}}>Entry Price</div>
+            <div style={{fontSize:20,fontWeight:700,color:"#fff"}}>
+              ${tr.entryPrice?tr.entryPrice.toFixed(8):"N/A"}
+            </div>
+            <div style={{fontSize:12,color:"#888",marginTop:2}}>per token</div>
+          </div>
         </div>
-      </Card>
+      </div>
+
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+        <StatBox label="Date" value={tr.date||"N/A"}/>
+        <StatBox label="Status" value={tr.status||"closed"} color={tr.status==="open"?"#30d158":"#f5a623"}/>
+        <StatBox label="Multiplier" value={tr.mult||"N/A"} color="#f5a623"/>
+      </div>
+
+      {/* On-Chain Record */}
+      {tr.tx && (
+        <Card>
+          <SectionTitle>On-Chain Record</SectionTitle>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+            <div style={{fontSize:11,fontFamily:"monospace",color:"#555",wordBreak:"break-all",flex:1}}>{tr.tx}</div>
+            <a href={`https://solscan.io/tx/${tr.tx}`} target="_blank" rel="noopener noreferrer"
+              style={{flexShrink:0,padding:"8px 18px",borderRadius:10,
+                background:"#f5a62318",border:"1px solid #f5a62333",
+                color:"#f5a623",fontSize:12,fontWeight:600,textDecoration:"none"}}>
+              ↗ Solscan
+            </a>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
