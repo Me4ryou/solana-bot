@@ -35,38 +35,52 @@ function useLiveData() {
         const lamports = balData?.result?.value || 0;
         setSolBalance(lamports / 1e9);
 
-        // Fetch token balances with metadata using Helius
+        // Fetch token accounts using standard RPC
         try {
-          const tokRes = await fetch(`https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`, {
+          const tokRes = await fetch(HELIUS_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               jsonrpc: "2.0", id: 2,
-              method: "getAssetsByOwner",
-              params: {
-                ownerAddress: WALLET,
-                page: 1,
-                limit: 50,
-                displayOptions: { showFungible: true, showNativeBalance: true }
-              }
+              method: "getTokenAccountsByOwner",
+              params: [
+                WALLET,
+                { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+                { encoding: "jsonParsed" }
+              ]
             })
           });
           const tokData = await tokRes.json();
-          const items = tokData?.result?.items || [];
-          const fungibles = items
-            .filter(item => item.interface === "FungibleToken" || item.interface === "FungibleAsset")
-            .map(item => ({
-              symbol: item.content?.metadata?.symbol || item.id?.slice(0,6) || "?",
-              name: item.content?.metadata?.name || "Unknown",
-              amount: item.token_info?.balance ? item.token_info.balance / Math.pow(10, item.token_info.decimals || 0) : 0,
-              price: item.token_info?.price_info?.price_per_token || 0,
-              value: item.token_info?.price_info?.total_price || 0,
-              mint: item.id,
-              image: item.content?.links?.image || null,
-            }))
-            .filter(t => t.amount > 0 && t.value > 0.01)
+          const accounts = tokData?.result?.value || [];
+
+          // Known token mint addresses
+          const KNOWN_TOKENS = {
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": { symbol: "USDC", name: "USD Coin", price: 1.0 },
+            "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": { symbol: "USDT", name: "Tether", price: 1.0 },
+            "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": { symbol: "BONK", name: "Bonk", price: 0.000032 },
+            "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": { symbol: "WIF", name: "dogwifhat", price: 2.41 },
+            "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr": { symbol: "POPCAT", name: "Popcat", price: 0.89 },
+          };
+
+          const tokenList = accounts
+            .map(a => {
+              const info = a.account.data.parsed.info;
+              const mint = info.mint;
+              const amount = parseFloat(info.tokenAmount.uiAmount || 0);
+              const known = KNOWN_TOKENS[mint];
+              const price = known?.price || 0;
+              return {
+                symbol: known?.symbol || mint.slice(0,4)+"...",
+                name: known?.name || "Unknown Token",
+                amount,
+                value: amount * price,
+                mint,
+              };
+            })
+            .filter(t => t.amount > 0)
             .sort((a,b) => b.value - a.value);
-          setTokens(fungibles);
+
+          setTokens(tokenList);
         } catch(e) {
           console.log("Token fetch error:", e);
         }
