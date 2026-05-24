@@ -1,6 +1,94 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 
+// ── CONFIG ────────────────────────────────────────────────────────────────────
+const HELIUS_API_KEY = "fbd1944f-48a7-4424-9986-18e327e6a25a";
+const WALLET = "64jnH8NDz1wtpPyN8cwXCKJE8gWojf1CZ7Wn9gb5QeR9";
+const HELIUS_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
+const AUD_RATE_DEFAULT = 1.54;
+
+// ── LIVE DATA HOOK ────────────────────────────────────────────────────────────
+function useLiveData() {
+  const [solBalance, setSolBalance] = useState(null);
+  const [tokens, setTokens] = useState([]);
+  const [solPrice, setSolPrice] = useState(182.6);
+  const [audRate, setAudRate] = useState(AUD_RATE_DEFAULT);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    async function fetchAll() {
+      try {
+        setLoading(true);
+
+        // Fetch SOL balance
+        const balRes = await fetch(HELIUS_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0", id: 1,
+            method: "getBalance",
+            params: [WALLET]
+          })
+        });
+        const balData = await balRes.json();
+        const lamports = balData?.result?.value || 0;
+        setSolBalance(lamports / 1e9);
+
+        // Fetch token accounts
+        const tokRes = await fetch(HELIUS_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0", id: 2,
+            method: "getTokenAccountsByOwner",
+            params: [WALLET,
+              { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+              { encoding: "jsonParsed" }
+            ]
+          })
+        });
+        const tokData = await tokRes.json();
+        const accounts = tokData?.result?.value || [];
+        const tokenList = accounts
+          .map(a => ({
+            mint: a.account.data.parsed.info.mint,
+            amount: parseFloat(a.account.data.parsed.info.tokenAmount.uiAmount || 0),
+            decimals: a.account.data.parsed.info.tokenAmount.decimals,
+          }))
+          .filter(t => t.amount > 0);
+        setTokens(tokenList);
+
+        // Fetch SOL price from DexScreener
+        const priceRes = await fetch("https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112");
+        const priceData = await priceRes.json();
+        const pairs = priceData?.pairs;
+        if (pairs && pairs.length > 0) {
+          const p = parseFloat(pairs[0].priceUsd);
+          if (p > 0) setSolPrice(p);
+        }
+
+        // Fetch AUD rate
+        const fxRes = await fetch("https://api.exchangerate-api.com/v4/latest/USD");
+        const fxData = await fxRes.json();
+        if (fxData?.rates?.AUD) setAudRate(fxData.rates.AUD);
+
+        setError(null);
+      } catch(e) {
+        setError("Could not fetch live data. Showing cached data.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchAll();
+    const interval = setInterval(fetchAll, 60000); // refresh every 60s
+    return () => clearInterval(interval);
+  }, []);
+
+  return { solBalance, tokens, solPrice, audRate, loading, error };
+}
+
 // ── DATA ──────────────────────────────────────────────────────────────────────
 const PORTFOLIO_DATA = [
   { t:"1 May",v:1200},{t:"5 May",v:1450},{t:"8 May",v:1320},{t:"10 May",v:1680},
@@ -224,15 +312,32 @@ const WALLET_ASSETS = [
 const WALLET_PIE_COLORS=WALLET_ASSETS.map(a=>a.color);
 
 function Portfolio(){
+  const { solBalance, tokens, solPrice, audRate, loading, error } = useLiveData();
+  const solBal = solBalance !== null ? solBalance : 12.48;
+  const solUSD = solBal * solPrice;
   const total=HOLDINGS.reduce((s,h)=>s+h.value,0);
   const totalPnl=HOLDINGS.reduce((s,h)=>s+h.pnl,0);
-  const solBal=12.48;
-  const walletTotal=WALLET_ASSETS.reduce((s,a)=>s+a.value,0);
-  const memeHoldings=HOLDINGS.map(h=>({name:h.symbol,value:h.value}));
-  const walletPieData=WALLET_ASSETS.map(a=>({name:a.symbol,value:a.value}));
+
+  // Build wallet assets with live SOL balance
+  const liveWalletAssets = [
+    {...WALLET_ASSETS[0], value: solUSD, amount: solBal},
+    ...WALLET_ASSETS.slice(1),
+  ];
+  const walletTotal=liveWalletAssets.reduce((s,a)=>s+a.value,0);
+  const walletPieData=liveWalletAssets.map(a=>({name:a.symbol,value:a.value}));
 
   return(
     <div style={{display:"flex",flexDirection:"column",gap:20}}>
+
+      {/* Live status */}
+      {error && (
+        <div style={{background:"#ff453a18",border:"1px solid #ff453a33",borderRadius:10,
+          padding:"10px 16px",fontSize:12,color:"#ff453a"}}>{error}</div>
+      )}
+      {loading && (
+        <div style={{background:"#f5a62318",border:"1px solid #f5a62333",borderRadius:10,
+          padding:"10px 16px",fontSize:12,color:"#f5a623"}}>🔄 Fetching live wallet data...</div>
+      )}
 
       {/* Top stats - compact */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:"clamp(8px,1vw,16px)"}}>
@@ -288,7 +393,7 @@ function Portfolio(){
             </PieChart>
           </ResponsiveContainer>
           <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:8,maxHeight:120,overflowY:"auto"}}>
-            {WALLET_ASSETS.map((a,i)=>(
+            {liveWalletAssets.map((a,i)=>(
               <div key={i} style={{display:"flex",alignItems:"center",gap:8,fontSize:11}}>
                 <div style={{width:6,height:6,borderRadius:"50%",background:a.color,flexShrink:0}}/>
                 <span style={{color:"#555",flex:1}}>{a.symbol}</span>
@@ -751,6 +856,21 @@ function Settings({onLock}){
   );
 }
 
+function LiveSolBalance(){
+  const { solBalance, solPrice, audRate, loading } = useLiveData();
+  const bal = solBalance !== null ? solBalance : 12.48;
+  const usd = bal * solPrice;
+  const aud = usd * audRate;
+  if (loading) return <div style={{color:"#444",fontSize:12}}>Loading...</div>;
+  return (
+    <>
+      <div style={{fontSize:26,fontWeight:700,color:"#f5a623",letterSpacing:-0.5}}>{bal.toFixed(3)} SOL</div>
+      <div style={{fontSize:14,fontWeight:600,color:"#ccc",marginTop:4}}>${fmt(usd)} USD</div>
+      <div style={{fontSize:13,color:"#666",marginTop:2}}>A${fmt(aud)} AUD</div>
+    </>
+  );
+}
+
 // ── TICKER COMPONENT ─────────────────────────────────────────────────────────
 function Ticker(){
   const ref = useRef(null);
@@ -886,9 +1006,7 @@ export default function App(){
         {/* SOL Balance */}
         <div style={{padding:"16px 20px",borderTop:"1px solid #1a1a1a"}}>
           <div style={{fontSize:9,color:"#333",textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>SOL Balance</div>
-          <div style={{fontSize:26,fontWeight:700,color:"#f5a623",letterSpacing:-0.5}}>12.480 SOL</div>
-          <div style={{fontSize:14,fontWeight:600,color:"#ccc",marginTop:4}}>$2,276.90 USD</div>
-          <div style={{fontSize:13,color:"#666",marginTop:2}}>A$3,506.43 AUD</div>
+          <LiveSolBalance/>
           <div style={{display:"flex",alignItems:"center",gap:6,marginTop:10}}>
             <div style={{width:6,height:6,borderRadius:"50%",background:"#30d158"}}/>
             <span style={{fontSize:10,color:"#30d158"}}>Live</span>
