@@ -328,18 +328,20 @@ function Portfolio(){
   const totalPnl=HOLDINGS.reduce((s,h)=>s+h.pnl,0);
 
   // Build wallet assets with live data
-  const liveTokenAssets = tokens.map((t, i) => ({
-    symbol: t.symbol,
-    name: t.name,
-    value: t.value,
-    amount: t.amount,
-    color: WALLET_PIE_COLORS[(i+1) % WALLET_PIE_COLORS.length],
-  }));
+  const liveTokenAssets = tokens
+    .filter(t => t.value > 0.001)
+    .map((t, i) => ({
+      symbol: t.symbol || "?",
+      name: t.name || "Unknown",
+      value: parseFloat(t.value) || 0,
+      amount: parseFloat(t.amount) || 0,
+      color: WALLET_PIE_COLORS[(i+1) % WALLET_PIE_COLORS.length],
+    }));
 
   const liveWalletAssets = [
-    {symbol:"SOL", name:"Solana", value: solUSD||0, amount: solBal||0, color:"#9945ff"},
+    {symbol:"SOL", name:"Solana", value: parseFloat(solUSD)||0, amount: parseFloat(solBal)||0, color:"#9945ff"},
     ...liveTokenAssets,
-  ].filter(a => a.value > 0);
+  ];
   const walletTotal=liveWalletAssets.reduce((s,a)=>s+(a.value||0),0);
   const walletPieData=liveWalletAssets.filter(a=>a.value>0).map(a=>({name:a.symbol,value:a.value}));
 
