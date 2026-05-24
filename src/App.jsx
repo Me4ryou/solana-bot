@@ -3,9 +3,23 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, 
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const HELIUS_API_KEY = "fbd1944f-48a7-4424-9986-18e327e6a25a";
-const WALLET = "DjavxeTn2HTea62J6qNhn43SRfz4YUaCYJc9tR9Vy7Ae";
+const DEFAULT_WALLET = "DjavxeTn2HTea62J6qNhn43SRfz4YUaCYJc9tR9Vy7Ae";
 const HELIUS_URL = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
 const AUD_RATE_DEFAULT = 1.54;
+
+function getSavedWallets() {
+  try {
+    return JSON.parse(localStorage.getItem("wallets") || "[]");
+  } catch { return []; }
+}
+
+function saveWallets(wallets) {
+  localStorage.setItem("wallets", JSON.stringify(wallets));
+}
+
+function getActiveWallet() {
+  return localStorage.getItem("activeWallet") || DEFAULT_WALLET;
+}
 
 // ── LIVE DATA HOOK ────────────────────────────────────────────────────────────
 function useLiveData() {
@@ -23,6 +37,7 @@ function useLiveData() {
         setLoading(true);
 
         // Fetch SOL balance
+        const WALLET = getActiveWallet();
         const balRes = await fetch(HELIUS_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -138,9 +153,12 @@ function useLiveData() {
                 const solPriceEst = 182;
                 const investedUSD = sentSym === "SOL" ? amountInvested * solPriceEst : amountInvested;
                 
+                // Try to get better token name from mint
+                const mintShort = received.mint?.slice(0,6) || "?";
+                const sym = received.symbol || mintShort;
                 return {
-                  symbol: received.symbol || received.mint?.slice(0,6) || "?",
-                  name: received.tokenName || received.symbol || "Unknown Token",
+                  symbol: sym,
+                  name: received.tokenName || received.symbol || `Token ${mintShort}`,
                   date: date.toLocaleDateString("en-AU", {day:"numeric",month:"short",year:"numeric"}),
                   amountBought: received.tokenAmount || 0,
                   amountInvested: investedUSD,
