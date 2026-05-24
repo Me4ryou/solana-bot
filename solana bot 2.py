@@ -9,6 +9,11 @@ import json
 import asyncio
 import aiohttp
 import aiosqlite
+import io
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -56,6 +61,120 @@ async def init_db():
         )
         """)
         await db.commit()
+
+
+# ── CHART GENERATOR ───────────────────────────────────────────────────────────
+
+async def fetch_ohlcv(ca: str) -> list | None:
+    """Fetch OHLCV candle data from DexScreener."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Get pair address first
+            url = f"https://api.dexscreener.com/latest/dex/tokens/{ca}"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as res:
+                if res.status != 200:
+                    return None
+                data = await res.json()
+                pairs = data.get("pairs")
+                if not pairs:
+                    return None
+                pair = sorted(pairs, key=lambda p: p.get("liquidity", {}).get("usd", 0), reverse=True)[0]
+                pair_addr = pair.get("pairAddress")
+                chain = pair.get("chainId", "solana")
+            # Fetch candles
+            candle_url = f"https://api.dexscreener.com/latest/dex/candles/{chain}/{pair_addr}?from=0&to=9999999999&res=5"
+            async with session.get(candle_url, timeout=aiohttp.ClientTimeout(total=10)) as res:
+                if res.status != 200:
+                    return None
+                cdata = await res.json()
+                return cdata.get("candles", [])
+    except Exception:
+        return None
+
+def generate_chart(candles: list, entry_price: float, milestone: int, symbol: str) -> io.BytesIO | None:
+    """Generate candlestick chart with entry and milestone markers."""
+    try:
+        if not candles or len(candles) < 5:
+            return None
+
+        # Use last 60 candles max
+        candles = candles[-60:]
+        opens  = [float(c.get("open",  0)) for c in candles]
+        highs  = [float(c.get("high",  0)) for c in candles]
+        lows   = [float(c.get("low",   0)) for c in candles]
+        closes = [float(c.get("close", 0)) for c in candles]
+        vols   = [float(c.get("volume", 0)) for c in candles]
+        xs     = list(range(len(candles)))
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6),
+                                        gridspec_kw={"height_ratios": [4, 1]},
+                                        facecolor="#0d1117")
+        ax1.set_facecolor("#0d1117")
+        ax2.set_facecolor("#0d1117")
+
+        # Draw candles
+        for i, (o, h, l, c) in enumerate(zip(opens, highs, lows, closes)):
+            color = "#26a69a" if c >= o else "#ef5350"
+            ax1.plot([i, i], [l, h], color=color, linewidth=1, zorder=2)
+            ax1.bar(i, abs(c - o), bottom=min(o, c), color=color, width=0.6, zorder=3, alpha=0.9)
+
+        # Entry marker — find closest candle to entry price
+        entry_idx = min(range(len(closes)), key=lambda i: abs(closes[i] - entry_price))
+        ax1.scatter([entry_idx], [lows[entry_idx] * 0.97], marker="^",
+                    color="#00ff88", s=130, zorder=5)
+        ax1.annotate(f"  Entry\n  ${entry_price:.6f}",
+                     xy=(entry_idx, lows[entry_idx] * 0.97),
+                     color="#00ff88", fontsize=7.5, fontweight="bold", va="top")
+
+        # Milestone marker — find peak
+        peak_price = max(highs)
+        peak_idx = highs.index(peak_price)
+        milestone_colors = {2: "#FFD700", 5: "#E8E8E8", 10: "#FF6B35",
+                           25: "#B388FF", 50: "#00E5FF", 100: "#FF4081"}
+        mc = milestone_colors.get(milestone, "#FFD700")
+        ax1.scatter([peak_idx], [highs[peak_idx] * 1.02], marker="v",
+                    color=mc, s=130, zorder=5)
+        ax1.annotate(f"{milestone}X  \n${peak_price:.6f}  ",
+                     xy=(peak_idx, highs[peak_idx] * 1.02),
+                     color=mc, fontsize=7.5, fontweight="bold",
+                     ha="right", va="bottom")
+
+        # Dashed line at milestone level
+        ax1.axhline(y=entry_price * milestone, color=mc,
+                    linestyle="--", linewidth=0.8, alpha=0.4)
+
+        # Style ax1
+        ax1.set_xlim(-1, len(candles))
+        ax1.tick_params(colors="#666666", labelsize=7)
+        ax1.yaxis.set_tick_params(labelcolor="#888888")
+        ax1.xaxis.set_visible(False)
+        for spine in ax1.spines.values():
+            spine.set_color("#1e1e2e")
+        ax1.grid(axis="y", color="#1e1e2e", linewidth=0.5)
+
+        # Volume
+        vol_colors = ["#26a69a" if c >= o else "#ef5350" for o, c in zip(opens, closes)]
+        ax2.bar(xs, vols, color=vol_colors, alpha=0.7, width=0.6)
+        ax2.tick_params(colors="#444444", labelsize=6)
+        ax2.xaxis.set_visible(False)
+        ax2.set_ylabel("Vol", color="#444444", fontsize=7)
+        for spine in ax2.spines.values():
+            spine.set_color("#1e1e2e")
+
+        # Title
+        fig.text(0.5, 0.97, f"${symbol} / SOL  •  5m  •  Sol Signals",
+                 ha="center", color="#888888", fontsize=9)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.97])
+        plt.subplots_adjust(hspace=0.05)
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor="#0d1117")
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+    except Exception:
+        return None
 
 # ── BROADCAST HELPER ──────────────────────────────────────────────────────────
 
@@ -496,7 +615,13 @@ async def monitor_prices(app):
                         f"📈 Now: <b>{fmt_usd(current_mc)}</b> MC — <b>{fmt_x(multiplier)}</b>\n\n"
                         f"{build_links(ca)}"
                     )
-                    await broadcast(app.bot, chat_id, alert)
+                    # Try to send with chart
+                    candles = await fetch_ohlcv(ca)
+                    chart = generate_chart(candles, entry_price, m, symbol) if candles else None
+                    if chart:
+                        await broadcast(app.bot, chat_id, alert, image=chart)
+                    else:
+                        await broadcast(app.bot, chat_id, alert)
 
             async with aiosqlite.connect(DB_FILE) as db:
                 await db.execute("""
