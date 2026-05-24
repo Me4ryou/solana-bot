@@ -276,7 +276,8 @@ function PinScreen({onUnlock}){
     setPin(next);
     if(next.length===4){
       setTimeout(()=>{
-        if(next==="0000"){onUnlock();}
+        const savedPin = localStorage.getItem("dashPin") || "0000";
+        if(next===savedPin){onUnlock();}
         else{setShake(true);setTimeout(()=>{setShake(false);setPin("");},600);}
       },150);
     }
@@ -855,14 +856,16 @@ function Settings({onLock, notificationsOn, setNotificationsOn, currency, setCur
 
   const handlePinChange = () => {
     if(pinStep === 1){
-      if(oldPin !== "0000"){ setPinMsg("❌ Current PIN incorrect"); return; }
+      const savedPin = localStorage.getItem("dashPin") || "0000";
+      if(oldPin !== savedPin){ setPinMsg("❌ Current PIN incorrect"); return; }
       setPinMsg(""); setPinStep(2);
     } else if(pinStep === 2){
       if(newPin.length !== 4){ setPinMsg("PIN must be 4 digits"); return; }
       setPinMsg(""); setPinStep(3);
     } else {
       if(confirmPin !== newPin){ setPinMsg("❌ PINs don't match"); return; }
-      setPinMsg("✅ PIN changed! (Note: resets on redeploy — store it safely)");
+      localStorage.setItem("dashPin", newPin);
+      setPinMsg("✅ PIN changed successfully!");
       setTimeout(()=>{ setChangingPin(false); setPinStep(1); setOldPin(""); setNewPin(""); setConfirmPin(""); setPinMsg(""); }, 2000);
     }
   };
