@@ -319,8 +319,8 @@ function Portfolio(){
   const { solBalance, tokens, solPrice, audRate, loading, error } = useLiveData();
   const solBal = solBalance !== null ? solBalance : 12.48;
   const solUSD = solBal * solPrice;
-  const total = walletTotal;
-  const totalPnl = 0; // Will come from real trade history
+  const total = liveWalletAssets.reduce((s,a)=>s+a.value,0);
+  const totalPnl = 0;
 
   // Build wallet assets with live data
   const liveTokenAssets = tokens.map((t, i) => ({
@@ -332,11 +332,11 @@ function Portfolio(){
   }));
 
   const liveWalletAssets = [
-    {symbol:"SOL", name:"Solana", value: solUSD, amount: solBal, color:"#9945ff"},
+    {symbol:"SOL", name:"Solana", value: solUSD||0, amount: solBal||0, color:"#9945ff"},
     ...liveTokenAssets,
-  ];
-  const walletTotal=liveWalletAssets.reduce((s,a)=>s+a.value,0);
-  const walletPieData=liveWalletAssets.map(a=>({name:a.symbol,value:a.value}));
+  ].filter(a => a.value > 0);
+  const walletTotal=liveWalletAssets.reduce((s,a)=>s+(a.value||0),0);
+  const walletPieData=liveWalletAssets.filter(a=>a.value>0).map(a=>({name:a.symbol,value:a.value}));
 
   return(
     <div style={{display:"flex",flexDirection:"column",gap:20}}>
@@ -349,6 +349,12 @@ function Portfolio(){
       {loading && (
         <div style={{background:"#f5a62318",border:"1px solid #f5a62333",borderRadius:10,
           padding:"10px 16px",fontSize:12,color:"#f5a623"}}>🔄 Fetching live wallet data...</div>
+      )}
+      {!loading && liveWalletAssets.length === 0 && (
+        <div style={{background:"#1a1a1a",border:"1px solid #2a2a2a",borderRadius:10,
+          padding:"20px",fontSize:13,color:"#555",textAlign:"center"}}>
+          No assets found in this wallet yet.
+        </div>
       )}
 
       {/* Top stats - compact */}
