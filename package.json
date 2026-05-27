@@ -1,18 +1,21 @@
 {
-  "name": "sol-dashboard",
+  "name": "kol-tracker",
   "version": "1.0.0",
+  "description": "KOL Convergence Tracker for Solana meme coins",
+  "main": "src/index.js",
   "scripts": {
-    "build": "vite build",
-    "start": "node server.js"
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
   },
   "dependencies": {
-    "express": "^4.18.2"
+    "telegraf": "^4.15.3",
+    "express": "^4.18.2",
+    "better-sqlite3": "^9.4.3",
+    "axios": "^1.6.7",
+    "dotenv": "^16.4.1",
+    "node-cron": "^3.0.3"
   },
   "devDependencies": {
-    "vite": "^5.0.0",
-    "@vitejs/plugin-react": "^4.0.0",
-    "react": "^18.0.0",
-    "react-dom": "^18.0.0",
-    "recharts": "^2.8.0"
+    "nodemon": "^3.0.3"
   }
 }

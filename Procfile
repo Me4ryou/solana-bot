@@ -1,2 +1,1 @@
-worker: python3 "solana bot 2.py"
-web: npm run build && npm start
+web: node src/index.js
